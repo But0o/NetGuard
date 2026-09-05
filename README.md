@@ -92,7 +92,7 @@ This project is being used to develop practical knowledge of:
 
 * [x] Detect local network interfaces
 * [x] Determine local IP address
-* [ ] Determine network and CIDR
+* [x] Determine network and CIDR
 * [ ] Discover active hosts
 
 ### Phase 2 — Connectivity Monitoring
