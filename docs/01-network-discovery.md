@@ -97,7 +97,38 @@ Punto de conexión de la máquina a una red. Puede ser física (Wi-Fi, Ethernet)
 
 ---
 
+## Obtención de datos reales: `subprocess`
+
+Para que NetGuard lea el estado real de la red (en vez de datos hardcodeados), se usa el módulo `subprocess` para ejecutar comandos del sistema operativo desde Python y capturar su resultado.
+
+Comando usado: `ip -j addr` (el flag `-j` devuelve la salida en formato JSON, fácil de parsear).
+
+```python
+import subprocess
+
+resultado = subprocess.run(["ip", "-j", "addr"], capture_output=True, text=True)
+```
+
+Puntos clave:
+
+- El comando se pasa como **lista** de argumentos (`["ip", "-j", "addr"]`), no como un único string. Esta es la forma segura de usar `subprocess`.
+- `capture_output=True`: evita que la salida del comando se imprima directo en la terminal: la guarda en el objeto devuelto.
+- `text=True`: devuelve la salida como string de texto, no como bytes.
+- Todo proceso de Linux tiene 3 canales estándar: **stdin** (entrada), **stdout** (salida normal) y **stderr** (salida de errores), separados entre sí. `resultado.stdout` contiene la salida normal del comando (el JSON); `resultado.stderr` contendría un mensaje de error si lo hubiera.
+
+### Alternativas consideradas
+
+- `os.system()`: más simple pero no permite capturar la salida fácilmente.
+- `subprocess.Popen()`: versión de más bajo nivel, útil si se necesita leer la salida mientras el proceso todavía corre. `subprocess.run()` está construido sobre `Popen` y alcanza para este caso de uso.
+
+### Nota de seguridad (Cybersecurity)
+
+`subprocess.run()` con una lista de argumentos fijos es seguro. Existe la variante `shell=True` (ejecutar el comando como string a través de una shell), que es **peligrosa** si alguna parte del comando proviene de input externo (usuario, red, archivo) — abre la puerta a **command injection**. No aplica todavía porque el comando es fijo, pero hay que tenerlo en cuenta cuando el proyecto incorpore inputs externos (por ejemplo, que el usuario elija qué host o rango escanear).
+
+---
+
 ## Dudas abiertas
 
 - Revisar la diferencia entre el rango "clásico" (`172.16.0.0/16`, `192.168.0.0/24`) y el rango real reservado por RFC 1918 (`172.16.0.0/12`, `192.168.0.0/16`).
 - Entender por qué existen distintos tamaños de red privada y cuándo se usa cada uno.
+- **Pendiente**: manejo de errores en el script de interfaces — revisar `resultado.returncode` y `resultado.stderr` por si el comando `ip` falla o no existe en el sistema, en vez de asumir que siempre funciona.
