@@ -125,10 +125,38 @@ Puntos clave:
 
 `subprocess.run()` con una lista de argumentos fijos es seguro. Existe la variante `shell=True` (ejecutar el comando como string a través de una shell), que es **peligrosa** si alguna parte del comando proviene de input externo (usuario, red, archivo) — abre la puerta a **command injection**. No aplica todavía porque el comando es fijo, pero hay que tenerlo en cuenta cuando el proyecto incorpore inputs externos (por ejemplo, que el usuario elija qué host o rango escanear).
 
+## Cálculo de la red: `ipaddress`
+
+Tener una IP y un CIDR por separado (ej. `192.168.1.202` + `24`) **no es lo mismo** que conocer la red a la que pertenece esa IP. La red se obtiene "apagando" (poniendo en 0) los bits de host de la IP, dejando intactos los bits de red — es decir, aplicando la máscara.
+
+Se usa el módulo built-in `ipaddress` para hacer este cálculo, en vez de programarlo a mano con operaciones binarias (más propenso a errores):
+
+```python
+import ipaddress
+
+interfaz = ipaddress.ip_interface("192.168.1.202/24")
+interfaz.network   # IPv4Network('192.168.1.0/24') → la red calculada
+interfaz.ip         # IPv4Address('192.168.1.202') → la IP puntual, sin CIDR
+interfaz.netmask    # IPv4Address('255.255.255.0') → la máscara en formato decimal
+```
+
+Puntos clave:
+
+- `ip_interface()` recibe un string `"IP/CIDR"`.
+- `.network` devuelve la dirección de red (un rango, por eso incluye el `/CIDR`).
+- `.ip` devuelve solo la IP puntual (un host individual no tiene CIDR propio).
+- Los objetos que devuelve `ipaddress` (`IPv4Network`, `IPv4Address`) **no son serializables a JSON directamente** — hay que convertirlos con `str(...)` antes de guardarlos o imprimirlos como parte de una estructura que después se vaya a persistir.
+
+Verificado a mano con un caso de corte no alineado a octeto (`192.168.1.100/28` → red `192.168.1.96/28`), coincidiendo el cálculo manual (binario) con el resultado de la librería.
+
+### Alternativas consideradas
+
+- Calcular la red a mano con operaciones binarias (AND lógico entre IP y máscara) — es lo que `ipaddress` hace internamente, pero reimplementarlo es innecesario y más propenso a bugs.
+- `netaddr` (librería externa) — más features, pero `ipaddress` (built-in) alcanza para este caso de uso.
+
 ---
 
 ## Dudas abiertas
 
-- Revisar la diferencia entre el rango "clásico" (`172.16.0.0/16`, `192.168.0.0/24`) y el rango real reservado por RFC 1918 (`172.16.0.0/12`, `192.168.0.0/16`).
 - Entender por qué existen distintos tamaños de red privada y cuándo se usa cada uno.
 - **Pendiente**: manejo de errores en el script de interfaces — revisar `resultado.returncode` y `resultado.stderr` por si el comando `ip` falla o no existe en el sistema, en vez de asumir que siempre funciona.
