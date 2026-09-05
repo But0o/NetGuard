@@ -90,8 +90,8 @@ This project is being used to develop practical knowledge of:
 
 ### Phase 1 — Network Discovery
 
-* [ ] Detect local network interfaces
-* [ ] Determine local IP address
+* [x] Detect local network interfaces
+* [x] Determine local IP address
 * [ ] Determine network and CIDR
 * [ ] Discover active hosts
 
