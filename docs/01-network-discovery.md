@@ -69,13 +69,40 @@ Ejemplos trabajados:
 | /26  | 255.255.255.192  | 3 completos + 2 bits |
 | /28  | 255.255.255.240  | 3 completos + 4 bits |
 
-## Rangos de IP privadas
+## Rangos de IP privadas (RFC 1918)
 
-Reservados para uso interno — nunca aparecen como IPs públicas en internet:
+Reservados para uso interno — nunca aparecen como IPs públicas en internet. Cada rango está pensado para una escala distinta de organización:
 
-- `10.0.0.0/8`
-- `172.16.0.0/16` (a confirmar: el rango RFC 1918 real es `172.16.0.0/12`, más amplio — ver "Dudas abiertas")
-- `192.168.0.0/24` (a confirmar: el rango RFC 1918 real es `192.168.0.0/16` — ver "Dudas abiertas")
+| Rango | Tamaño | Rango completo | Uso típico |
+|-------|--------|-----------------|------------|
+| `10.0.0.0/8` | 1 octeto de red | `10.0.0.0` – `10.255.255.255` | Organizaciones muy grandes (+16M direcciones) |
+| `172.16.0.0/12` | Corte a mitad del 2do octeto | `172.16.0.0` – `172.31.255.255` | Organizaciones medianas (~1M direcciones) |
+| `192.168.0.0/16` | 2 octetos de red | `192.168.0.0` – `192.168.255.255` | Redes chicas / hogareñas (65K direcciones) |
+
+### Por qué `172.16.0.0/12` abarca más de lo que parece
+
+`/12` no cae en un límite de octeto — cae en el medio del **segundo** octeto (8 bits del primer octeto + 4 bits del segundo). Igual que con los ejercicios de `/26` y `/28` (pero ahí el corte caía en el 4to octeto), acá hay que separar el segundo octeto en dos mitades de 4 bits:
+
+```
+Segundo octeto de 172.16.0.0 → 16 → binario 00010000
+Bits de red (los primeros 4):  0001
+Bits de host (los últimos 4):  0000
+```
+
+- Con los bits de host en `0000` → segundo octeto = **16** → inicio del rango.
+- Con los bits de host en `1111` → segundo octeto = **31** → fin del rango.
+
+Por eso `172.16.0.0/12` no es solo `172.16.x.x` — cubre los 16 bloques `/16` desde `172.16.x.x` hasta `172.31.x.x`.
+
+`192.168.0.0/16`, en cambio, cae justo en un límite de octeto (2 octetos completos), así que su rango real coincide con la forma "simplificada" en la que se lo suele mencionar.
+
+### Por qué existen 3 tamaños distintos
+
+No es una cuestión de velocidad de búsqueda (encontrar un host en una red no es una búsqueda secuencial — un paquete va directo a su destino, como una carta con dirección completa). La razón real es:
+
+1. **Uso eficiente del espacio de direcciones**: reservar un `/8` para 5 dispositivos desperdicia direcciones sin ningún beneficio.
+2. **Organización y subnetting**: usar un rango del tamaño adecuado deja margen para dividir la red en subredes más chicas y lógicas más adelante (ej. separar servidores de dispositivos IoT). Si se ocupa todo el espacio de entrada sin estructura, se pierde esa flexibilidad.
+3. **Tráfico de broadcast**: ciertos tipos de tráfico (broadcast, ARP — pendiente de profundizar) se envían a todos los hosts posibles de una red; una red innecesariamente grande genera más de este tráfico sin necesidad real.
 
 ## Gateway
 
@@ -155,8 +182,3 @@ Verificado a mano con un caso de corte no alineado a octeto (`192.168.1.100/28` 
 - `netaddr` (librería externa) — más features, pero `ipaddress` (built-in) alcanza para este caso de uso.
 
 ---
-
-## Dudas abiertas
-
-- Entender por qué existen distintos tamaños de red privada y cuándo se usa cada uno.
-- **Pendiente**: manejo de errores en el script de interfaces — revisar `resultado.returncode` y `resultado.stderr` por si el comando `ip` falla o no existe en el sistema, en vez de asumir que siempre funciona.
