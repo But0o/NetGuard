@@ -98,7 +98,7 @@ This project is being used to develop practical knowledge of:
 ### Phase 2 — Connectivity Monitoring
 
 * [ ] ICMP/Ping monitoring
-* [ ] Latency measurement
+* [x] Latency measurement
 * [ ] Timeout handling
 * [ ] Packet loss calculation
 * [ ] Monitoring logs
