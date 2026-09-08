@@ -122,22 +122,109 @@ def hacer_ping(ip):
     }
 ```
 
-Probada con:
+## Timeout configurable
 
-- `192.168.1.1` (gateway real, activo) → `{"ip": "192.168.1.1", "activo": True, "ttl": 63, "tiempo_ms": 51.0}`
-- `192.168.1.100` (IP sin dispositivo conocido) → `{"ip": "192.168.1.100", "activo": False}`
+El comportamiento por defecto de `ping` (esperar el timeout que decida el sistema operativo) no es controlable desde el código. Se agrega el flag `-W <segundos>` para definir explícitamente cuánto esperar una respuesta por paquete antes de darse por vencido.
+
+Nota: `-W` (mayúscula) es el timeout de espera **por paquete individual**; `-w` (minúscula) es un **deadline total** para todo el comando. Con `-c 1` se comportan parecido, pero son conceptualmente distintos — importa la diferencia si se manda más de un paquete.
+
+Se agregó como parámetro de la función, con valor por defecto, para poder ajustarlo según el contexto (LAN rápida vs. host remoto) sin hardcodear el valor:
+
+```python
+def hacer_ping(ip, timeout=1):
+    resultado = subprocess.run(
+        ["ping", "-c", "4", "-W", str(timeout), ip],
+        capture_output=True,
+        text=True
+    )
+```
+
+El parámetro se guarda como número (no como string) y se convierte con `str(timeout)` solo en el momento de armarlo dentro de la lista — así queda disponible como número real si se necesita para cálculos en otra parte del código.
+
+## Packet loss (pérdida de paquetes)
+
+Con un solo paquete (`-c 1`) el porcentaje de pérdida solo puede ser 0% o 100% — no aporta información real. Se cambió `-c` de `1` a `4` para que el cálculo tenga sentido (algún paquete puede perderse sin que los otros se pierdan también).
+
+`ping` ya calcula el porcentaje de pérdida y lo expone en la línea de resumen, junto con el promedio (`avg`) de latencia de todos los paquetes enviados:
+
+```
+4 paquetes transmitidos, 4 recibidos, 0% packet loss, time 3063ms
+rtt min/avg/max/mdev = 0.024/0.033/0.040/0.006 ms
+```
+
+Regex usados:
+
+```python
+tiempo = re.search(r"rtt min/avg/max/mdev = (\d+\.\d+)/(\d+\.\d+)/(\d+\.\d+)/(\d+\.\d+)", texto)
+perdida = re.search(r"(\d+)% packet loss", texto)
+```
+
+- `tiempo`: 4 grupos de captura separados, uno por cada valor (min, avg, max, mdev) — `.group(2)` da el promedio, que es el valor de interés.
+- `perdida`: el número queda **antes** del texto de ancla (`% packet loss`), a diferencia de `ttl=(\d+)` donde el ancla iba antes del número.
+
+### Por qué el TTL no necesita este mismo tratamiento
+
+Con 4 paquetes, `ttl=(\d+)` con `re.search()` solo captura el TTL del **primer** paquete (`re.search` se detiene en la primera coincidencia, a diferencia de `re.findall()` que devuelve todas). Esto es una simplificación aceptable: el TTL depende de la cantidad de saltos de router que atraviesa el paquete, y esa cantidad no cambia entre paquetes de la misma sesión de ping — se confirmó empíricamente que los 4 TTL de una misma sesión son idénticos entre sí, mientras que la latencia sí varía naturalmente paquete a paquete.
+
+Se probó también `re.findall()` para capturar los 4 TTL como lista, pero se descartó para esta función: `findall()` devuelve una lista de strings, no un objeto Match, por lo que no tiene `.group()` — hay que indexarla directamente (`lista[0]`). Se dejó como concepto para explorar más adelante, cuando haya un caso real que necesite todas las coincidencias, no solo la primera.
+
+### Función completa (Fase 2 cerrada)
+
+```python
+def hacer_ping(ip, timeout=1):
+    resultado = subprocess.run(
+        ["ping", "-c", "4", "-W", str(timeout), ip],
+        capture_output=True,
+        text=True
+    )
+
+    if resultado.returncode != 0:
+        return {"ip": ip, "activo": False}
+
+    texto = resultado.stdout
+    ttl = re.search(r"ttl=(\d+)", texto)
+    tiempo = re.search(r"rtt min/avg/max/mdev = (\d+\.\d+)/(\d+\.\d+)/(\d+\.\d+)/(\d+\.\d+)", texto)
+    perdida = re.search(r"(\d+)% packet loss", texto)
+
+    return {
+        "ip": ip,
+        "activo": True,
+        "ttl": int(ttl.group(1)),
+        "tiempo_ms": float(tiempo.group(2)),
+        "perdida": float(perdida.group(1))
+    }
+```
 
 ---
 
-## Problema detectado: escaneo secuencial es lento
+## Primera versión de "Discover active hosts"
 
-El objetivo de esta fase (y el ítem pendiente de Fase 1, "Discover active hosts") es escanear **todas** las IPs posibles de una red (ej. 254 en un `/24`), no solo una IP puntual.
+Usando `ipaddress.ip_network(...).hosts()` (ya visto en Fase 1) combinado con `hacer_ping()`, se puede recorrer una red completa y quedarse solo con los hosts que responden:
 
-`ipaddress.ip_network("192.168.1.0/24").hosts()` da todas las IPs utilizables de una red (sin contar dirección de red ni broadcast).
+```python
+import ipaddress
 
-Sin embargo, llamar a `hacer_ping()` de forma **secuencial** (una IP por vez, esperando a que cada una termine) sería muy lento: cada ping puede tardar desde ~50ms (host activo) hasta varios segundos (timeout de host inactivo), y en una red doméstica típica la mayoría de las 254 IPs no tienen ningún dispositivo real — el escaneo completo podría tardar varios minutos.
+red = ipaddress.ip_network("192.168.1.0/24")
 
-## Próximo paso: concurrencia
+for host in red.hosts():
+    ip_texto = str(host)
+    resultado_ping = hacer_ping(ip_texto)
+
+    if resultado_ping["activo"] == True:
+        print(resultado_ping)
+```
+
+Detalle importante: `.hosts()` devuelve objetos `IPv4Address`, no strings — hay que convertir cada uno con `str(host)` antes de pasarlo a `hacer_ping()`, que espera un string para poder armar la lista de `subprocess.run()`.
+
+### Medición real de performance (problema detectado)
+
+Prueba con un rango chico (`192.168.1.0/28`, 14 hosts posibles): **~56 segundos** para completar el escaneo, de los cuales solo 2 hosts estaban activos (el resto, timeouts).
+
+Extrapolando a una red `/24` completa (254 hosts): **~17 minutos estimados** para un solo escaneo secuencial. Esto es inutilizable en la práctica, sobre todo pensando en el monitoreo continuo planteado para fases futuras (Fase 6).
+
+**Causa**: el escaneo actual es **secuencial** — cada `hacer_ping()` espera a que termine el anterior antes de arrancar el siguiente, y cada host inactivo cuesta varios segundos de timeout (4 paquetes × timeout cada uno).
+
+**Próximo paso**: introducir concurrencia (`threading`, `asyncio`, o `concurrent.futures`) para ejecutar múltiples pings en simultáneo, en vez de uno por uno.
 
 Para resolver esto se necesita ejecutar múltiples pings **al mismo tiempo** en vez de uno por uno. Conceptos a estudiar en la próxima sesión:
 
