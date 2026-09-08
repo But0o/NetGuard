@@ -93,14 +93,14 @@ This project is being used to develop practical knowledge of:
 * [x] Detect local network interfaces
 * [x] Determine local IP address
 * [x] Determine network and CIDR
-* [ ] Discover active hosts
+* [x] Discover active hosts <- Falta Pulir
 
 ### Phase 2 — Connectivity Monitoring
 
-* [ ] ICMP/Ping monitoring
+* [x] ICMP/Ping monitoring <- Falta Pulir
 * [x] Latency measurement
-* [ ] Timeout handling
-* [ ] Packet loss calculation
+* [x] Timeout handling
+* [x] Packet loss calculation
 * [ ] Monitoring logs
 
 ### Phase 3 — Port Scanning
