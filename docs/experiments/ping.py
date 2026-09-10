@@ -1,6 +1,9 @@
 import subprocess
 import re
 import ipaddress
+from concurrent.futures import ThreadPoolExecutor
+from functools import partial
+import time
 
 def hacer_ping(ip, timeout=1):
     resultado = subprocess.run(
@@ -25,11 +28,25 @@ def hacer_ping(ip, timeout=1):
         "perdida" : float(perdida.group(1))
     }
 
-red = ipaddress.ip_network("192.168.1.0/28")
+red = ipaddress.ip_network("10.255.144.0/21")
+
+lista_ip = []
 
 for host in red.hosts():
     ip_texto = str(host)
-    resultado_ping = hacer_ping(ip_texto)
-    
-    if resultado_ping["activo"] == True:
-        print(resultado_ping)
+    lista_ip.append(ip_texto)
+
+timeout_ping = partial(hacer_ping, timeout=1)
+
+inicio = time.time()
+
+with ThreadPoolExecutor(max_workers=30) as pool:
+    resultados = list(pool.map(timeout_ping, lista_ip))
+
+fin = time.time()
+
+for activos in resultados:
+    if activos["activo"] == True:
+        print(activos)
+
+print(f"Tardó {fin - inicio:.2f} segundos")
