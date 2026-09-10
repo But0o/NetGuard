@@ -110,6 +110,65 @@ El código `11` volvió a aparecer, ahora en una red completamente distinta (Sta
 
 **Hipótesis (no confirmada con fuente técnica, basada en el patrón observado)**: el código `11` podría estar asociado a puertos con **filtrado activo** por parte del router/firewall, a diferencia de puertos simplemente cerrados sin nada escuchando (que dan el `111` "limpio", como el caso del 443). Los puertos donde apareció el `11` hasta ahora (80 en la facultad, 21 y 23 en casa) tienen algo en común: son puertos "sensibles" — una posible interfaz de administración, y dos protocolos viejos e inseguros (FTP y Telnet, que transmiten credenciales sin cifrar) que routers modernos suelen filtrar activamente por seguridad, en vez de dejarlos simplemente cerrados. No se encontró documentación específica que confirme esta relación causal — queda como hipótesis razonable respaldada por el patrón observado en dos redes distintas, a confirmar con más casos o investigación más adelante.
 
+**Contraevidencia — la hipótesis de "puertos sensibles" no explica todos los casos**: al integrar el pipeline completo (detección automática de red + ping + escaneo de puertos) y correrlo contra la red doméstica completa, se obtuvieron 3 hosts activos con patrones bien distintos:
+
+```
+192.168.1.1   (router)    → 80: Abierto(0) | 443: Cerrado(111) | 22: Abierto(0) | 21: Cerrado(11) | 23: Cerrado(11)
+192.168.1.28  (desconocido) → 80: Cerrado(11) | 443: Cerrado(11) | 22: Cerrado(11) | 21: Cerrado(11) | 23: Cerrado(11)
+192.168.1.202 (notebook)   → 80: Cerrado(111) | 443: Cerrado(111) | 22: Cerrado(111) | 21: Cerrado(111) | 23: Cerrado(111)
+```
+
+`192.168.1.28` dio código `11` en **los 5 puertos por igual**, incluyendo 80 y 443 — puertos que no encajan con la idea de "protocolo viejo e inseguro". Esto contradice la hipótesis de que el `11` depende del **puerto** en sí.
+
+**Hipótesis revisada**: el patrón parece estar más ligado al **tipo de dispositivo** que al puerto específico consultado. La propia notebook (Linux estándar) da siempre `111` limpio; el router da una mezcla; y `192.168.1.28` (dispositivo no identificado — posible IoT, celular, u otro tipo de equipo con una pila de red distinta) da `11` de forma uniforme en todos los puertos. Sigue sin confirmarse la causa técnica exacta — queda como línea de investigación abierta, con evidencia de que el factor determinante podría ser el dispositivo/su sistema operativo, no el puerto consultado.
+
+---
+
+## Pipeline completo integrado
+
+Se integraron todas las piezas de las Fases 1, 2 y 3 en un único flujo, sin ningún dato hardcodeado:
+
+1. `obtener_interfaces()` (Fase 1): detecta las interfaces reales de la máquina.
+2. Se filtra la interfaz de loopback (`"lo"`) para quedarse con la interfaz de red real (ej. `wlan0`).
+3. Se arma el objeto `ipaddress.ip_network(...)` a partir del campo `"red"` de esa interfaz — la red a escanear ya no se hardcodea, se detecta en el momento de ejecutar.
+4. Se escanean todas las IPs de esa red con `hacer_ping()` (Fase 2), usando `ThreadPoolExecutor` para concurrencia.
+5. Por cada host que resulta activo, se le escanean los puertos comunes con `escanear_host()` (Fase 3).
+
+```python
+interfaces = obtener_interfaces()
+
+interfaz_encontrada = None
+for interfaz in interfaces:
+    if interfaz["interfas"] != "lo":
+        interfaz_encontrada = interfaz
+
+red = ipaddress.ip_network(interfaz_encontrada["red"])
+
+lista_ip = []
+for host in red.hosts():
+    ip_texto = str(host)
+    lista_ip.append(ip_texto)
+
+timeout_ping = partial(hacer_ping, timeout=1)
+
+with ThreadPoolExecutor(max_workers=30) as pool:
+    resultados = list(pool.map(timeout_ping, lista_ip))
+
+for activos in resultados:
+    if activos["activo"] == True:
+        print(json.dumps(escanear_host(activos["ip"]), indent=4))
+```
+
+Prueba real contra la red doméstica (`192.168.1.0/24`, detectada automáticamente): **34.84 segundos** para el escaneo completo de ping + puertos de los 3 hosts activos encontrados.
+
+### Bug corregido durante la integración
+
+En `escanear_puerto()`, el bloque `except socket.timeout` intentaba devolver `"codigo": resultado`, pero `resultado` nunca llega a asignarse si la excepción se dispara (la línea `resultado = s.connect_ex(...)` se interrumpe antes de completarse). Corregido a `"codigo": None`, ya que no hay ningún código numérico real que reportar en ese caso.
+
+### `obtener_interfaces()` como función reutilizable
+
+El script de detección de interfaces de Fase 1 (antes código suelto a nivel de módulo) se envolvió en una función, siguiendo el mismo patrón que el resto de las funciones del proyecto — permite reutilizarlo desde cualquier parte del flujo, en vez de ejecutarse automáticamente con solo importar el archivo.
+
 ---
 
 ## Función completa: `escanear_puerto()`
@@ -163,8 +222,8 @@ for puerto in puertos_comunes:
 
 ## Dudas / pendientes
 
-- **Pendiente**: confirmar con más evidencia (o documentación específica) la hipótesis sobre el código `11` y su relación con puertos filtrados activamente.
-- **Pendiente**: implementar la función de connect scan completa, probando una lista de puertos comunes por host.
+- **Pendiente**: investigar si el código `11` depende del tipo/sistema operativo del dispositivo en vez del puerto consultado — hipótesis revisada, sin confirmar.
 - **Pendiente**: UDP — mencionado en el roadmap original pero no cubierto todavía (UDP no tiene handshake, el descubrimiento de puertos funciona distinto).
 - **Pendiente**: detección básica de servicios a partir de qué puerto responde.
-- **Pendiente**: combinar `escanear_puerto()` con concurrencia (`ThreadPoolExecutor`) para escanear múltiples puertos en múltiples hosts de forma eficiente — sería el siguiente paso natural, combinando lo aprendido en Fase 2 con esta fase.
+- **Pendiente**: manejar el caso de múltiples interfaces de red reales activas simultáneamente (ej. Wi-Fi + Ethernet a la vez) — por ahora se toma la última interfaz no-loopback encontrada, sin lógica de selección más sofisticada.
+- **Pendiente**: mover el escaneo de puertos por host a concurrencia también (actualmente el ping usa `ThreadPoolExecutor`, pero el escaneo de puertos de cada host activo corre de forma secuencial).
