@@ -94,11 +94,77 @@ Lo que **no** se pudo confirmar con certeza (no reproducible desde un entorno di
 
 **Decisión**: para la función de connect scan, tratar cualquier código distinto de `0` (incluyendo `11`) como "no se pudo confirmar que el puerto está abierto", sin necesidad de diferenciar cada subtipo de error por ahora. Revisar esta duda más adelante si se repite el patrón o se encuentra documentación más específica.
 
+**Actualización — el código 11 es reproducible**: se repitió el mismo código `11` en una segunda prueba independiente contra la misma IP (`10.255.150.1:80`), usando la función `escanear_puerto()` ya implementada. Esto descarta que haya sido un evento aislado o ruido puntual — es un comportamiento consistente contra esa IP/red específica, aunque la causa exacta sigue sin confirmarse.
+
+**Actualización — el código 11 también aparece en la red doméstica (Starlink)**: al escanear varios puertos comunes contra el router de casa (`192.168.1.1`), se obtuvo:
+
+```
+80  → Abierto  (código 0)
+443 → Cerrado  (código 111)
+22  → Abierto  (código 0)
+21  → Cerrado  (código 11)
+23  → Cerrado  (código 11)
+```
+
+El código `11` volvió a aparecer, ahora en una red completamente distinta (Starlink en casa, no la facultad), y en puertos distintos al caso anterior (21 y 23, no el 80). Esto descarta que el `11` esté ligado a una red específica.
+
+**Hipótesis (no confirmada con fuente técnica, basada en el patrón observado)**: el código `11` podría estar asociado a puertos con **filtrado activo** por parte del router/firewall, a diferencia de puertos simplemente cerrados sin nada escuchando (que dan el `111` "limpio", como el caso del 443). Los puertos donde apareció el `11` hasta ahora (80 en la facultad, 21 y 23 en casa) tienen algo en común: son puertos "sensibles" — una posible interfaz de administración, y dos protocolos viejos e inseguros (FTP y Telnet, que transmiten credenciales sin cifrar) que routers modernos suelen filtrar activamente por seguridad, en vez de dejarlos simplemente cerrados. No se encontró documentación específica que confirme esta relación causal — queda como hipótesis razonable respaldada por el patrón observado en dos redes distintas, a confirmar con más casos o investigación más adelante.
+
+---
+
+## Función completa: `escanear_puerto()`
+
+```python
+def escanear_puerto(ip, puerto, timeout=1):
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.settimeout(timeout)
+
+    try:
+        resultado = s.connect_ex((ip, puerto))
+        s.close()
+
+        if resultado == 0:
+            return {"ip": ip, "puerto": puerto, "estado": "Abierto", "codigo": resultado}
+        else:
+            return {"ip": ip, "puerto": puerto, "estado": "Cerrado", "codigo": resultado}
+
+    except socket.timeout:
+        s.close()
+        return {"ip": ip, "puerto": puerto, "estado": "No Determinado", "codigo": None}
+```
+
+Se agregó la clave `"codigo"` al resultado (guardando el valor crudo de `connect_ex()`) para tener trazabilidad completa de qué código específico originó cada estado — útil para investigar casos como el del código `11` sin tener que reconstruir el contexto manualmente cada vez.
+
+### Pruebas realizadas
+
+- `escanear_puerto("10.255.150.1", 80)` → `{"estado": "Cerrado", "codigo": 11}` (dos veces, mismo resultado — ver duda abierta sobre el código 11).
+- Verificado contra `127.0.0.1` con un puerto cerrado conocido → código `111` como se esperaba (caso "limpio", confirma que la función distingue bien el caso estándar).
+
+### Nota sobre organización del código
+
+`hacer_ping()` y `escanear_puerto()` conviven en el mismo archivo de experimentos (`docs/experiments/ping.py`) — son funciones independientes, una al lado de la otra, no anidadas. Separarlas en módulos distintos (`app/network/`, `app/scanner/`, etc., según la estructura definida en el roadmap) tiene sentido más adelante, cuando el proyecto haga la transición a una arquitectura de aplicación real (probablemente en Fase 8, con FastAPI) — no antes, mientras el código sigue siendo material de aprendizaje activo.
+
+---
+
+### Escaneo de múltiples puertos contra un mismo host
+
+Reutilizando `escanear_puerto()`, se recorre una lista de puertos comunes con un `for` simple (secuencial — no se aplicó concurrencia acá, ya que son solo 5 puertos, la diferencia de tiempo sería mínima):
+
+```python
+ip = "192.168.1.1"
+puertos_comunes = [80, 443, 22, 21, 23]
+
+for puerto in puertos_comunes:
+    resultado = escanear_puerto(ip, puerto)
+    print(resultado)
+```
+
 ---
 
 ## Dudas / pendientes
 
-- **Pendiente**: entender con certeza la causa del código `11` (EAGAIN) en el contexto específico probado.
+- **Pendiente**: confirmar con más evidencia (o documentación específica) la hipótesis sobre el código `11` y su relación con puertos filtrados activamente.
 - **Pendiente**: implementar la función de connect scan completa, probando una lista de puertos comunes por host.
 - **Pendiente**: UDP — mencionado en el roadmap original pero no cubierto todavía (UDP no tiene handshake, el descubrimiento de puertos funciona distinto).
 - **Pendiente**: detección básica de servicios a partir de qué puerto responde.
+- **Pendiente**: combinar `escanear_puerto()` con concurrencia (`ThreadPoolExecutor`) para escanear múltiples puertos en múltiples hosts de forma eficiente — sería el siguiente paso natural, combinando lo aprendido en Fase 2 con esta fase.
