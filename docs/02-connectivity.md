@@ -226,12 +226,114 @@ Extrapolando a una red `/24` completa (254 hosts): **~17 minutos estimados** par
 
 **Próximo paso**: introducir concurrencia (`threading`, `asyncio`, o `concurrent.futures`) para ejecutar múltiples pings en simultáneo, en vez de uno por uno.
 
-Para resolver esto se necesita ejecutar múltiples pings **al mismo tiempo** en vez de uno por uno. Conceptos a estudiar en la próxima sesión:
+---
 
-- `threading`
-- `asyncio`
-- `concurrent.futures`
-- Qué es un thread, diferencia entre paralelismo y concurrencia, el GIL de Python.
+## Concurrencia: escaneo en paralelo con `ThreadPoolExecutor`
+
+### Proceso vs. thread
+
+- **Proceso**: programa en ejecución con su propia memoria, aislado de otros procesos.
+- **Thread (hilo)**: línea de ejecución **dentro** de un proceso. Varios threads de un mismo proceso **comparten la misma memoria** — a diferencia de procesos distintos, que están aislados entre sí. Crear un thread es más liviano que crear un proceso nuevo.
+
+Para esta tarea (mandar muchos pings, donde cada uno pasa la mayor parte del tiempo **esperando** una respuesta de red, no haciendo cálculo de CPU), usar threads dentro de un mismo proceso es la opción adecuada — no hace falta el aislamiento total que da un proceso separado.
+
+### Por qué no crear un thread por cada IP
+
+Crear un thread por cada una de las ~254 (o ~2046) IPs generaría overhead innecesario de gestión, y saturaría la propia placa de red al mandar todos los Echo Request prácticamente al mismo instante — probablemente generando pérdida de paquetes real por congestión propia, no por problemas de los hosts destino.
+
+### Thread pool: cantidad fija de workers repartiendo el trabajo
+
+Se usa un **pool** con una cantidad limitada de threads ("workers", ej. 30), que van tomando IPs de la lista pendiente, una por una, hasta terminarlas todas — en vez de un thread por IP.
+
+Herramienta: `concurrent.futures.ThreadPoolExecutor` (built-in).
+
+```python
+from concurrent.futures import ThreadPoolExecutor
+
+with ThreadPoolExecutor(max_workers=30) as pool:
+    resultados = list(pool.map(funcion, lista_de_argumentos))
+```
+
+- `pool.map(funcion, lista)`: aplica `funcion` a cada elemento de `lista`, repartiendo el trabajo entre los workers, devolviendo los resultados en el mismo orden que la lista original.
+- El `with` cierra el pool automáticamente al terminar.
+
+Prueba de concepto con una función simulada (`time.sleep(2)` × 5 tareas, `max_workers=5`): tardó ~2 segundos en total (no 10), confirmando la ejecución en paralelo.
+
+### `functools.partial`: fijar parámetros de antemano
+
+`hacer_ping(ip, timeout=1)` recibe dos parámetros, pero `pool.map()` solo permite pasar una lista de argumentos (uno por llamada) para el parámetro que varía. Como `timeout` es el mismo para todas las IPs, se "fija" de antemano con `functools.partial`, dejando `ip` como único parámetro variable:
+
+```python
+from functools import partial
+
+timeout_ping = partial(hacer_ping, timeout=1)
+# timeout_ping("192.168.1.1") equivale a hacer_ping("192.168.1.1", timeout=1)
+```
+
+Se descartó usar una variable global para el timeout: rompería la posibilidad de llamar a `hacer_ping()` puntualmente con un valor distinto sin afectar todas las demás llamadas.
+
+### Script completo de escaneo concurrente
+
+```python
+import time
+from concurrent.futures import ThreadPoolExecutor
+from functools import partial
+
+red = ipaddress.ip_network("192.168.1.0/24")
+
+lista_ip = []
+for host in red.hosts():
+    ip_texto = str(host)
+    lista_ip.append(ip_texto)
+
+timeout_ping = partial(hacer_ping, timeout=1)
+
+inicio = time.time()
+
+with ThreadPoolExecutor(max_workers=30) as pool:
+    resultados = list(pool.map(timeout_ping, lista_ip))
+
+fin = time.time()
+
+for activos in resultados:
+    if activos["activo"] == True:
+        print(activos)
+
+print(f"Tardó {fin - inicio:.2f} segundos")
+```
+
+### Resultado real medido
+
+Probado contra la red de la facultad (`10.255.144.0/21`, ~2046 hosts posibles), con `max_workers=30`:
+
+```
+Tardó 263.18 segundos (~4.4 minutos)
+```
+
+Estimación previa (IPs ÷ workers × tiempo por IP, basado en la medición secuencial de ~4 seg/IP): `2046 ÷ 30 ≈ 68 IPs por worker × ~4 seg ≈ 272 segundos` — la medición real coincidió de cerca con la estimación, confirmando el modelo mental: la mejora de la concurrencia es proporcional a la cantidad de workers, pero cada worker sigue procesando sus IPs asignadas de forma secuencial (68 IPs por "carril", no 1 IP por carril).
+
+Comparación de referencia: un `/24` (254 IPs) de forma puramente secuencial se estimó en ~17 minutos. Con concurrencia, incluso una red ~8 veces más grande (`/21`) se resolvió en menos de 5 minutos.
+
+### Caso de estudio: fingerprinting con TTL 255
+
+De ~2046 IPs escaneadas, solo 2 respondieron activas:
+
+```python
+{'ip': '10.255.147.107', 'activo': True, 'ttl': 64, 'tiempo_ms': 0.02, 'perdida': 0.0}
+{'ip': '10.255.150.1', 'activo': True, 'ttl': 255, 'tiempo_ms': 61.306, 'perdida': 0.0}
+```
+
+El segundo caso es interesante: **TTL 255** es el valor máximo posible (8 bits → 0-255), y no es típico de sistemas operativos de escritorio (Linux ≈ 64, Windows ≈ 128) — es una convención común en **equipos de infraestructura de red** (routers, switches gestionados, firewalls), que suelen configurar el TTL al máximo para asegurar que sus paquetes de control lleguen sin agotarse, independientemente de la cantidad de saltos.
+
+Sumado a que la IP termina en `.1` (convención habitual para gateways/dispositivos principales de una subred, ya vista con el router doméstico), la hipótesis más razonable es que `10.255.150.1` sea el **router/gateway** de esa subred de la facultad, no un servidor de aplicaciones.
+
+Esto es un ejemplo de **fingerprinting pasivo**: inferir el tipo de dispositivo detrás de una IP a partir de características del tráfico (en este caso, el TTL), sin acceso directo al dispositivo. Es una hipótesis razonable combinando varias pistas, no una certeza absoluta — el TTL puede configurarse manualmente distinto al default.
+
+### Limitación importante: ICMP en redes con seguridad activa
+
+Solo 2 de ~2046 IPs respondieron en la red de la facultad. Es muy probable que la mayoría de los dispositivos reales de esa red tengan **ICMP bloqueado** por firewall o política de seguridad — "no responder al ping" **no implica necesariamente "no hay ningún dispositivo activo en esa IP"**.
+
+**Conclusión**: el descubrimiento de hosts basado puramente en ICMP/ping es rápido y simple, pero no es 100% confiable en redes con medidas de seguridad activas. Queda pendiente para Fase 3 (Port Scanning) explorar una alternativa: detectar hosts activos mediante intentos de conexión TCP a puertos específicos, que en algunos casos puede funcionar incluso con ICMP bloqueado.
 
 ---
 
@@ -239,4 +341,6 @@ Para resolver esto se necesita ejecutar múltiples pings **al mismo tiempo** en 
 
 - **Pendiente**: verificar la cadena de saltos del caso TTL 63 con `traceroute`/`tracepath`.
 - **Pendiente**: implementar versión con raw sockets (`socket`) más adelante — requiere permisos root, mayor control y aprendizaje.
-- **Pendiente**: concurrencia para el escaneo de red completo (próxima sesión).
+- **Pendiente (Fase 3)**: explorar `asyncio` como alternativa a `ThreadPoolExecutor` — comparar diferencias, ventajas y desventajas de cada enfoque para concurrencia en I/O.
+- **Pendiente (Fase 3)**: descubrimiento de hosts vía TCP connect a puertos específicos, como alternativa a ICMP en redes con seguridad activa.
+- **Pendiente**: profundizar el GIL de Python y su impacto en threads vs. procesos para tareas de CPU vs. tareas de I/O (como este caso de ping).
