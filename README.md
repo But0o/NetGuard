@@ -97,19 +97,19 @@ This project is being used to develop practical knowledge of:
 
 ### Phase 2 — Connectivity Monitoring
 
-* [ ] ICMP/Ping monitoring <- Todavia No Se Considera Monitoring
+* [x] ICMP/Ping monitoring <- Todavia No Se Considera Monitoring
 * [x] Latency measurement
 * [x] Timeout handling
 * [x] Packet loss calculation
-* [ ] Monitoring logs
+* [ ] Monitoring logs <- Se dejo para Fase 6
 
 ### Phase 3 — Port Scanning
 
 * [x] TCP socket scanning
 * [x] Configurable port ranges <- Configurable Por Lista, No Por Rango
 * [x] Connection timeout
-* [ ] Concurrent scanning
-* [ ] Basic service detection
+* [x] Concurrent scanning
+* [x] Basic service detection
 
 ### Phase 4 — DNS
 
