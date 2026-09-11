@@ -220,10 +220,122 @@ for puerto in puertos_comunes:
 
 ---
 
+## Concurrencia en el escaneo de puertos
+
+El escaneo de puertos dentro de `escanear_host()` corría de forma secuencial (un puerto atrás del otro), mismo problema de fondo que se resolvió en Fase 2 para el ping — cada `escanear_puerto()` espera una respuesta de red, candidato ideal para correr en paralelo con `ThreadPoolExecutor`.
+
+### Bug encontrado: `partial` con argumento fijado por nombre vs. por posición
+
+Primer intento, fijando `ip` **por nombre**:
+
+```python
+puertos_distintos = partial(escanear_puerto, ip=ip, timeout=1)
+```
+
+Esto generó `TypeError: escanear_puerto() got multiple values for argument 'ip'`.
+
+**Causa**: `escanear_puerto(ip, puerto, timeout=1)` tiene `ip` como su **primer parámetro posicional**. Al fijar `ip` por nombre (`ip=ip`) pero no por posición, cuando `pool.map()` llama a la función parcial con cada puerto de la lista (ej. `puertos_distintos(80)`), Python intenta ubicar ese `80` en el primer parámetro posicional disponible — que sigue siendo `ip`, generando un conflicto: dos valores para el mismo parámetro (el fijado por nombre, y el que intenta colocar `pool.map()`).
+
+**Solución**: fijar `ip` **posicionalmente**, sin el `nombre=`:
+
+```python
+puertos_distintos = partial(escanear_puerto, ip, timeout=1)
+```
+
+Al ocupar la primera posición de forma posicional, el valor que manda `pool.map()` (cada puerto) cae naturalmente en el siguiente parámetro libre (`puerto`), sin ambigüedad.
+
+**Por qué no pasó este problema con `hacer_ping`**: en `partial(hacer_ping, timeout=1)`, el único parámetro fijado (`timeout`) no es el primero de la firma (`hacer_ping(ip, timeout=1)`) — `ip` quedó completamente libre, sin fijar ni por nombre ni por posición, así que no hubo ningún conflicto de posición.
+
+### `escanear_host()` actualizada, con concurrencia en puertos
+
+```python
+def escanear_host(ip, puertos=None):
+    if puertos is None:
+        puertos = [80, 443, 22, 21, 23]
+
+    resultado_ping = hacer_ping(ip)
+
+    if resultado_ping["activo"] == False:
+        return {"ip": ip, "activo": False, "puertos": []}
+
+    puertos_distintos = partial(escanear_puerto, ip, timeout=1)
+
+    with ThreadPoolExecutor(max_workers=5) as pool:
+        resultados_puertos = list(pool.map(puertos_distintos, puertos))
+
+    return {"ip": ip, "activo": True, "puertos": resultados_puertos}
+```
+
+`max_workers=5` porque son exactamente 5 puertos en la lista por defecto — alcanza para que todos corran al mismo tiempo, sin desperdiciar workers de más.
+
+### Resultado medido
+
+Pipeline completo (detección de red + ping concurrente + escaneo de puertos concurrente) contra la red de la facultad (`/21`, ~2046 hosts posibles):
+
+```
+133.18 segundos
+```
+
+Comparado con la medición previa de **263.18 segundos**, que correspondía únicamente a la parte de ping (sin concurrencia en puertos, y sin el escaneo de puertos integrado todavía). La reducción es notable considerando que la corrida actual hace más trabajo total (ping + puertos por cada host activo), no menos.
+
+---
+
+## Detección básica de servicios
+
+Se agregó un diccionario fijo que mapea puerto → nombre de servicio conocido, para los 5 puertos comunes usados en el proyecto:
+
+```python
+servicios = {80: "HTTP", 443: "HTTPS", 22: "SSH", 21: "FTP", 23: "Telnet"}
+```
+
+Dentro de `escanear_puerto()`, se consulta ese diccionario con `.get(puerto, "Desconocido")` en vez de acceso directo por clave (`servicios[puerto]`), para evitar un `KeyError` si se escanea un puerto que no está en la tabla (ej. `8080`) — `.get()` permite dar un valor por defecto sin romper la ejecución.
+
+### Función `escanear_puerto()` final, con detección de servicio
+
+```python
+servicios = {80: "HTTP", 443: "HTTPS", 22: "SSH", 21: "FTP", 23: "Telnet"}
+
+def escanear_puerto(ip, puerto, timeout=1):
+    nombre_servicio = servicios.get(puerto, "Desconocido")
+
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.settimeout(timeout)
+
+    try:
+        resultado = s.connect_ex((ip, puerto))
+        s.close()
+
+        if resultado == 0:
+            return {"ip": ip, "puerto": puerto, "estado": "Abierto", "codigo": resultado, "servicio": nombre_servicio}
+        else:
+            return {"ip": ip, "puerto": puerto, "estado": "Cerrado", "codigo": resultado, "servicio": nombre_servicio}
+
+    except socket.timeout:
+        s.close()
+        return {"ip": ip, "puerto": puerto, "estado": "No Determinado", "codigo": None, "servicio": nombre_servicio}
+```
+
+`nombre_servicio` se calcula una sola vez al principio de la función y se reutiliza en los 3 `return`, evitando repetir la búsqueda.
+
+Probado con éxito, incluyendo el caso de un puerto fuera de la tabla (`8080`), que devuelve `"Desconocido"` sin romper la ejecución.
+
+**Nota**: esto es un mapeo por convención (well-known ports), no una detección real del servicio corriendo — un puerto abierto en el 8080 podría perfectamente tener un servidor HTTP, y un puerto 80 filtrado o reconfigurado podría no tener nada relacionado con HTTP. Una detección de servicio más robusta implicaría analizar la respuesta real del servicio (banner grabbing), fuera del alcance de esta fase.
+
+---
+
+## Fase 3 — Estado final
+
+- [x] TCP socket scanning
+- [x] Connection timeout
+- [x] Concurrent scanning
+- [x] Basic service detection
+- [ ] Configurable port ranges (parcial — acepta lista custom de puertos, no rango numérico tipo 1-1000)
+
+---
+
 ## Dudas / pendientes
 
 - **Pendiente**: investigar si el código `11` depende del tipo/sistema operativo del dispositivo en vez del puerto consultado — hipótesis revisada, sin confirmar.
 - **Pendiente**: UDP — mencionado en el roadmap original pero no cubierto todavía (UDP no tiene handshake, el descubrimiento de puertos funciona distinto).
 - **Pendiente**: detección básica de servicios a partir de qué puerto responde.
 - **Pendiente**: manejar el caso de múltiples interfaces de red reales activas simultáneamente (ej. Wi-Fi + Ethernet a la vez) — por ahora se toma la última interfaz no-loopback encontrada, sin lógica de selección más sofisticada.
-- **Pendiente**: mover el escaneo de puertos por host a concurrencia también (actualmente el ping usa `ThreadPoolExecutor`, pero el escaneo de puertos de cada host activo corre de forma secuencial).
