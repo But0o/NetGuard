@@ -53,7 +53,11 @@ def hacer_ping(ip, timeout=1):
     }
 
 
+servicios = {80: "HTTP", 443: "HTTPS", 22: "SSH", 21: "FTP", 23: "Telnet"}
+
 def escanear_puerto(ip, puerto, timeout=1):
+    nombre_servicio = servicios.get(puerto,"Desconocido")
+
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.settimeout(timeout)
 
@@ -62,13 +66,13 @@ def escanear_puerto(ip, puerto, timeout=1):
         s.close()
 
         if resultado == 0:
-            return {"ip": ip, "puerto": puerto, "estado": "Abierto", "codigo": resultado}
+            return {"ip": ip, "puerto": puerto, "estado": "Abierto", "codigo": resultado, "servicio": nombre_servicio}
         else:
-            return {"ip": ip, "puerto": puerto, "estado": "Cerrado", "codigo": resultado}
+            return {"ip": ip, "puerto": puerto, "estado": "Cerrado", "codigo": resultado, "servicio": nombre_servicio}
 
     except socket.timeout:
         s.close()
-        return {"ip": ip, "puerto": puerto, "estado": "No Determinado", "codigo": None}
+        return {"ip": ip, "puerto": puerto, "estado": "No Determinado", "codigo": None, "servicio": nombre_servicio}
 
 
 def escanear_host(ip, puertos=None):
@@ -80,12 +84,12 @@ def escanear_host(ip, puertos=None):
     if resultado_ping["activo"] == False:
         return {"ip": ip, "activo": False, "puertos": []}
 
-    resultados_puertos = []
-    for puerto in puertos:
-        resultados_puertos.append(escanear_puerto(ip, puerto))
+    puertos_distintos = partial(escanear_puerto, ip, timeout=1)
+
+    with ThreadPoolExecutor(max_workers=5) as pool:
+        resultados_puertos = list(pool.map(puertos_distintos, puertos))
 
     return {"ip": ip, "activo": True, "puertos": resultados_puertos}
-
 
 # --- Auto-detección de la propia red (sin hardcodear IP) ---
 
@@ -112,7 +116,7 @@ for host in red.hosts():
 timeout_ping = partial(hacer_ping, timeout=1)
 
 inicio = time.time()
-with ThreadPoolExecutor(max_workers=30) as pool:
+with ThreadPoolExecutor(max_workers=60) as pool:
     resultados = list(pool.map(timeout_ping, lista_ip))
 fin = time.time()
 
