@@ -52,6 +52,25 @@ def hacer_ping(ip, timeout=1):
         "perdida": float(perdida.group(1))
     }
 
+def consultar_dns(dominio):
+    resultado = subprocess.run(
+        ["dig", dominio],
+        capture_output=True,
+        text=True
+    )
+
+    texto = resultado.stdout
+    ip_encontrada = re.search(r"A\s+(\d+\.\d+\.\d+\.\d+)", texto)
+
+    if ip_encontrada == None:
+        return {"dominio": dominio, "ip": None}
+
+    else:
+        return {
+            "dominio": dominio,
+            "ip": ip_encontrada.group(1)
+        }
+
 
 servicios = {80: "HTTP", 443: "HTTPS", 22: "SSH", 21: "FTP", 23: "Telnet"}
 
@@ -125,3 +144,5 @@ for activos in resultados:
         print(json.dumps(escanear_host(activos["ip"]), indent=4))
 
 print(f"Tardó {fin - inicio:.2f} segundos")
+print(consultar_dns("google.com"))
+print(consultar_dns("googleaksjdhkajhdkajhdkajhdkahd.com"))
