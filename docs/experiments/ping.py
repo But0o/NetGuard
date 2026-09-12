@@ -52,15 +52,29 @@ def hacer_ping(ip, timeout=1):
         "perdida": float(perdida.group(1))
     }
 
-def consultar_dns(dominio):
+patrones = {
+    "A": r"\bA\b[ \t]+(\d+\.\d+\.\d+\.\d+)",
+    "AAAA": r"\bAAAA\b[ \t]+(\S+)",
+    "MX": r"\bMX\b[ \t]+\d+[ \t]+(\S+)",
+    "NS": r"\bNS\b[ \t]+(\S+)",
+    "CNAME": r"\bCNAME\b[ \t]+(\S+)",
+    "TXT": r"\bTXT\b[ \t]+\"(.+)\""
+}
+
+def consultar_dns(dominio, tipo ="A"):
+    patrones_elegidos = patrones.get(tipo, "None")
+
+    if patrones_elegidos == None:
+        return {"dominio": dominio, "ip": None, "error": "Tipo de registro no soportado"}
+
     resultado = subprocess.run(
-        ["dig", dominio],
+        ["dig", dominio, tipo],
         capture_output=True,
         text=True
     )
 
     texto = resultado.stdout
-    ip_encontrada = re.search(r"A\s+(\d+\.\d+\.\d+\.\d+)", texto)
+    ip_encontrada = re.search(patrones_elegidos, texto)
 
     if ip_encontrada == None:
         return {"dominio": dominio, "ip": None}
@@ -144,5 +158,16 @@ for activos in resultados:
         print(json.dumps(escanear_host(activos["ip"]), indent=4))
 
 print(f"Tardó {fin - inicio:.2f} segundos")
+# Caso 1: sin especificar tipo, debería usar "A" por defecto (mismo comportamiento de siempre)
 print(consultar_dns("google.com"))
-print(consultar_dns("googleaksjdhkajhdkajhdkajhdkahd.com"))
+
+# Caso 2: especificando "A" explícitamente, debería dar el mismo resultado que el caso 1
+print(consultar_dns("google.com", "A"))
+
+# Caso 3: especificando "MX" — acá es donde vamos a confirmar el problema del regex
+print(consultar_dns("google.com", "MX"))
+
+# Caso 4: especificando "NS" — otro tipo de registro, mismo problema esperado
+print(consultar_dns("google.com", "NS"))
+
+print(consultar_dns("google.com", "PTR"))
