@@ -222,8 +222,53 @@ def consultar_dns(dominio, tipo="A"):
 
 ---
 
+## Reverse DNS
+
+Dado una IP, devuelve el nombre de dominio asociado. No es un mecanismo separado — internamente sigue siendo una consulta al registro **PTR**, usando el flag `-x` de `dig` en vez de pasar un dominio y tipo por separado:
+
+```bash
+dig -x 8.8.8.8
+```
+
+```
+;; QUESTION SECTION:
+;8.8.8.8.in-addr.arpa.        IN    PTR
+
+;; ANSWER SECTION:
+8.8.8.8.in-addr.arpa.    25350    IN    PTR    dns.google.
+```
+
+### Cómo funciona `in-addr.arpa` (dato conceptual, no requiere implementación manual)
+
+Reverse DNS reutiliza la infraestructura de nombres normal de DNS: la IP se invierte octeto por octeto y se le agrega el sufijo especial `.in-addr.arpa` (ej. `192.168.1.1` → `1.1.168.192.in-addr.arpa`), tratando la IP invertida como si fuera un nombre de dominio más. El flag `-x` de `dig` hace esta conversión automáticamente — no hace falta implementarla a mano.
+
+### Función `reverse_dns()`
+
+```python
+def reverse_dns(ip):
+    resultado = subprocess.run(["dig", "-x", ip], capture_output=True, text=True)
+    texto = resultado.stdout
+    nombre_encontrado = re.search(r"\bPTR\b[ \t]+(\S+)", texto)
+
+    if nombre_encontrado == None:
+        return {"ip": ip, "dominio": None}
+    else:
+        return {
+            "ip": ip,
+            "dominio": nombre_encontrado.group(1)
+        }
+```
+
+Mismo patrón consistente que `consultar_dns()` (subprocess → regex con `\b` + `[ \t]+` + grupo de captura → chequeo explícito de `None`), con los roles de `ip` y `dominio` invertidos respecto a la función original (acá `ip` es el input, `dominio` es el resultado).
+
+### Pruebas realizadas
+
+- `reverse_dns("8.8.8.8")` → `{"ip": "8.8.8.8", "dominio": "dns.google."}`
+- `reverse_dns("192.168.1.1")` (router doméstico) → `{"ip": "192.168.1.1", "dominio": "_gateway."}` — nombre genérico, probablemente asignado automáticamente por el propio router/DHCP, no un nombre público de internet. Confirma que reverse DNS también funciona en direcciones de red local, no solo IPs públicas.
+
+---
+
 ## Dudas / pendientes
 
-- **Pendiente**: implementar Reverse DNS (IP → nombre).
 - **Pendiente**: considerar migrar a `dnspython` en una fase más avanzada del proyecto, para mayor robustez que el parseo de texto de `dig`.
 - **Pendiente**: distinguir explícitamente entre "dominio no existe" (NXDOMAIN) y otros posibles errores de `dig` (timeout de red, servidor DNS no disponible, etc.) — actualmente todos los casos sin match de IP se tratan igual.
