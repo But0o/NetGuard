@@ -120,7 +120,7 @@ This project is being used to develop practical knowledge of:
 * [x] MX records
 * [x] NS records
 * [x] TXT records
-* [ ] Reverse DNS
+* [x] Reverse DNS
 
 ### Phase 5 — Network Inventory
 
