@@ -88,6 +88,19 @@ def consultar_dns(dominio, tipo ="A"):
 
 servicios = {80: "HTTP", 443: "HTTPS", 22: "SSH", 21: "FTP", 23: "Telnet"}
 
+def reverse_dns(ip):
+    resultado = subprocess.run(["dig", "-x", ip], capture_output=True, text=True)
+    texto = resultado.stdout
+    nombre_encontrado = re.search(r"\bPTR\b[ \t]+(\S+)", texto)
+
+    if nombre_encontrado == None:
+        return {"ip": ip, "dominio": None}
+    else:
+        return{
+            "ip": ip,
+            "dominio": nombre_encontrado.group(1)
+        }
+
 def escanear_puerto(ip, puerto, timeout=1):
     nombre_servicio = servicios.get(puerto,"Desconocido")
 
@@ -170,4 +183,8 @@ print(consultar_dns("google.com", "MX"))
 # Caso 4: especificando "NS" — otro tipo de registro, mismo problema esperado
 print(consultar_dns("google.com", "NS"))
 
+# Caso 5: especificando "PTR" - otro tipo de registo que no esta identificado
 print(consultar_dns("google.com", "PTR"))
+
+print(reverse_dns("8.8.8.8"))          # debería darte "dns.google."
+print(reverse_dns("192.168.1.1"))      # tu router de casa — probablemente no tenga PTR configurado, buen caso para probar el None
