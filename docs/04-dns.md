@@ -119,9 +119,111 @@ Ambas ramas del `if/else` devuelven las mismas claves (`"dominio"`, `"ip"`), con
 
 ---
 
+## Tipo de registro configurable
+
+La función inicial solo consultaba registros A (hardcodeado). Se agregó un parámetro `tipo="A"` para elegir qué tipo de registro consultar, con A como comportamiento por defecto (retrocompatible con las llamadas anteriores).
+
+### Diccionario de patrones por tipo de registro
+
+Cada tipo de registro tiene una forma de respuesta distinta en la salida de `dig`, por lo que se usa un diccionario que mapea tipo → su propio patrón regex, siguiendo el mismo criterio que `servicios` en Fase 3 (datos fijos, definidos a nivel de módulo, no dentro de la función — se crean una sola vez, no en cada llamada):
+
+```python
+patrones = {
+    "A": r"\bA\b[ \t]+(\d+\.\d+\.\d+\.\d+)",
+    "AAAA": r"\bAAAA\b[ \t]+(\S+)",
+    "MX": r"\bMX\b[ \t]+\d+[ \t]+(\S+)",
+    "NS": r"\bNS\b[ \t]+(\S+)",
+    "CNAME": r"\bCNAME\b[ \t]+(\S+)",
+    "TXT": r"\bTXT\b[ \t]+\"(.+)\""
+}
+```
+
+### Símbolos regex nuevos usados
+
+- `\S` (S mayúscula): opuesto a `\s` — "cualquier carácter que NO sea espacio en blanco". Usado para capturar nombres de dominio (`smtp.google.com.`) sin depender de su longitud o estructura interna.
+- `\b`: "límite de palabra" — marca la frontera entre un carácter de palabra (letras, números, `_`) y uno que no lo es (espacio, puntuación), sin consumir ningún carácter. No representa nada en el texto, solo valida una posición.
+- `[ \t]+`: clase de caracteres personalizada — "uno o más, cada uno espacio o tab", explícitamente **sin incluir saltos de línea** (a diferencia de `\s+`, que sí los incluye).
+- `.` (punto solo, sin escapar): "cualquier carácter". Usado en `TXT` como `(.+)` para capturar contenido con espacios internos, entre comillas literales (`\"`).
+
+### Bug 1: coincidencias parciales dentro de otras palabras
+
+Patrón inicial de NS: `r"NS\s+(\S+)"`. Devolvía `";;"` en vez del nombre real del servidor.
+
+**Causa**: sin `\b`, el patrón encuentra la secuencia de letras "NS" en **cualquier posición del texto**, incluso dentro de otra palabra que las contenga — por ejemplo, `ANSWER` contiene la secuencia `N-S` en su interior (`A-N-S-W-E-R`). El regex encontraba esa coincidencia accidental antes de llegar a la línea de respuesta real.
+
+**Solución**: `\bNS\b` — exige que "NS" sea una palabra completa, con límites de palabra antes y después, excluyendo coincidencias dentro de otras palabras.
+
+Este riesgo es mayor cuanto más corto es el nombre del tipo — `"A"` es el caso más extremo (aparece dentro de `ANSWER`, `AUTHORITY`, `ADDITIONAL`, etc.), por lo que se aplicó `\b` a los 6 patrones de forma preventiva, no solo a los que fallaban en las pruebas realizadas.
+
+### Bug 2: `\s+` cruza saltos de línea
+
+Aun con `\b` agregado, NS seguía devolviendo `";;"`.
+
+**Causa**: `\s` (espacio en blanco) **incluye el salto de línea** (`\n`), no solo espacios y tabs. El texto de `dig` tiene múltiples líneas — la palabra `NS` aparece primero en la `QUESTION SECTION` (`;google.com.  IN  NS`, sin nada más en esa línea), y el patrón `\s+` podía "cruzar" el salto de línea y la línea en blanco siguiente, llegando hasta el inicio de la próxima sección (`;;`) y capturando eso en vez de la respuesta real.
+
+Por qué el patrón de `"A"` no mostraba este problema pese al mismo riesgo: su grupo de captura exige explícitamente forma de IP (`\d+\.\d+\.\d+\.\d+`), así que aunque el regex "saltara" hasta `;;`, esa coincidencia no tiene forma de IP y se descarta automáticamente, forzando al motor de regex a seguir buscando más abajo hasta la respuesta real. El patrón de NS, en cambio, usaba `\S+` — lo suficientemente permisivo como para aceptar `;;` sin problema, dándose por satisfecho ahí.
+
+**Solución**: reemplazar `\s+` por `[ \t]+` en los 6 patrones — permite espacios y tabs dentro de la misma línea, pero nunca cruza a la línea siguiente.
+
+### Manejo de tipo de registro no soportado
+
+Antes de ejecutar `dig`, se valida que el `tipo` pedido tenga un patrón definido en el diccionario — evita ejecutar la consulta y, más importante, evita un `TypeError` al pasarle `None` como patrón a `re.search()` (distinto de cuando `re.search()` no encuentra un match dentro del texto, que sí devuelve `None` de forma controlada — acá el problema sería que el patrón en sí no existe):
+
+```python
+patron_elegido = patrones.get(tipo, None)
+
+if patron_elegido == None:
+    return {"dominio": dominio, "ip": None, "error": "Tipo de registro no soportado"}
+```
+
+### Función completa final
+
+```python
+patrones = {
+    "A": r"\bA\b[ \t]+(\d+\.\d+\.\d+\.\d+)",
+    "AAAA": r"\bAAAA\b[ \t]+(\S+)",
+    "MX": r"\bMX\b[ \t]+\d+[ \t]+(\S+)",
+    "NS": r"\bNS\b[ \t]+(\S+)",
+    "CNAME": r"\bCNAME\b[ \t]+(\S+)",
+    "TXT": r"\bTXT\b[ \t]+\"(.+)\""
+}
+
+def consultar_dns(dominio, tipo="A"):
+    patron_elegido = patrones.get(tipo, None)
+
+    if patron_elegido == None:
+        return {"dominio": dominio, "ip": None, "error": "Tipo de registro no soportado"}
+
+    resultado = subprocess.run(
+        ["dig", dominio, tipo],
+        capture_output=True,
+        text=True
+    )
+
+    texto = resultado.stdout
+    ip_encontrada = re.search(patron_elegido, texto)
+
+    if ip_encontrada == None:
+        return {"dominio": dominio, "ip": None}
+    else:
+        return {
+            "dominio": dominio,
+            "ip": ip_encontrada.group(1)
+        }
+```
+
+### Pruebas finales realizadas
+
+- `consultar_dns("google.com")` (default, A) → IP real
+- `consultar_dns("google.com", "A")` → mismo resultado
+- `consultar_dns("google.com", "MX")` → `"smtp.google.com."`
+- `consultar_dns("google.com", "NS")` → `"ns3.google.com."` (corregido tras los 2 bugs)
+- `consultar_dns("google.com", "PTR")` (no soportado) → `{"ip": None, "error": "Tipo de registro no soportado"}`, sin romper
+
+---
+
 ## Dudas / pendientes
 
-- **Pendiente**: agregar soporte para elegir el tipo de registro a consultar (A, AAAA, MX, NS, TXT, CNAME) — actualmente la función solo consulta el registro A por defecto.
 - **Pendiente**: implementar Reverse DNS (IP → nombre).
 - **Pendiente**: considerar migrar a `dnspython` en una fase más avanzada del proyecto, para mayor robustez que el parseo de texto de `dig`.
 - **Pendiente**: distinguir explícitamente entre "dominio no existe" (NXDOMAIN) y otros posibles errores de `dig` (timeout de red, servidor DNS no disponible, etc.) — actualmente todos los casos sin match de IP se tratan igual.
