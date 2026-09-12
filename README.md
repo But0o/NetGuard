@@ -113,14 +113,14 @@ This project is being used to develop practical knowledge of:
 
 ### Phase 4 — DNS
 
-* [ ] DNS lookup
+* [x] DNS lookup
+* [x] A records
+* [x] AAAA records
+* [x] CNAME records
+* [x] MX records
+* [x] NS records
+* [x] TXT records
 * [ ] Reverse DNS
-* [ ] A records
-* [ ] AAAA records
-* [ ] CNAME records
-* [ ] MX records
-* [ ] NS records
-* [ ] TXT records
 
 ### Phase 5 — Network Inventory
 
