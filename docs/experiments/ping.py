@@ -121,21 +121,50 @@ def escanear_puerto(ip, puerto, timeout=1):
         return {"ip": ip, "puerto": puerto, "estado": "No Determinado", "codigo": None, "servicio": nombre_servicio}
 
 
-def escanear_host(ip, puertos=None):
+def escanear_host(ip, tabla_arp, puertos=None):
     if puertos is None:
         puertos = [80, 443, 22, 21, 23]
 
     resultado_ping = hacer_ping(ip)
 
     if resultado_ping["activo"] == False:
-        return {"ip": ip, "activo": False, "puertos": []}
+        return {"ip": ip,"mac": None, "activo": False, "puertos": []}
 
     puertos_distintos = partial(escanear_puerto, ip, timeout=1)
 
     with ThreadPoolExecutor(max_workers=5) as pool:
         resultados_puertos = list(pool.map(puertos_distintos, puertos))
 
-    return {"ip": ip, "activo": True, "puertos": resultados_puertos}
+    mac = buscar_mac(ip, tabla_arp)
+
+    return {"ip": ip,"mac": mac, "activo": True, "puertos": resultados_puertos}
+
+
+def obtener_tabla_arp():
+    resultado = subprocess.run(["ip", "-j", "neigh"], capture_output=True, text=True)
+    tabla_arp = json.loads(resultado.stdout)
+
+    lista_arp = []
+
+    for arp in tabla_arp:
+        lista_arp.append({"ip": arp["dst"], "mac": arp.get("lladdr", None)})
+
+    return lista_arp
+
+
+
+def buscar_mac(ip, lista_arp):
+
+    mac_encontrada = None
+
+    for entrada in lista_arp:
+        if entrada["ip"] == ip:
+            mac_encontrada = entrada["mac"]
+
+    return mac_encontrada
+
+
+
 
 # --- Auto-detección de la propia red (sin hardcodear IP) ---
 
@@ -166,9 +195,11 @@ with ThreadPoolExecutor(max_workers=60) as pool:
     resultados = list(pool.map(timeout_ping, lista_ip))
 fin = time.time()
 
+tabla_arp = obtener_tabla_arp()
+
 for activos in resultados:
     if activos["activo"] == True:
-        print(json.dumps(escanear_host(activos["ip"]), indent=4))
+        print(json.dumps(escanear_host(activos["ip"], tabla_arp), indent=4))
 
 print(f"Tardó {fin - inicio:.2f} segundos")
 # Caso 1: sin especificar tipo, debería usar "A" por defecto (mismo comportamiento de siempre)
@@ -188,3 +219,5 @@ print(consultar_dns("google.com", "PTR"))
 
 print(reverse_dns("8.8.8.8"))          # debería darte "dns.google."
 print(reverse_dns("192.168.1.1"))      # tu router de casa — probablemente no tenga PTR configurado, buen caso para probar el None
+
+print(obtener_tabla_arp())
