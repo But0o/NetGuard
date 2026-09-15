@@ -124,13 +124,13 @@ This project is being used to develop practical knowledge of:
 
 ### Phase 5 — Network Inventory
 
-* [ ] Host information
-* [ ] Hostnames
-* [ ] MAC addresses
-* [ ] Open ports
-* [ ] Detected services
-* [ ] Scan timestamps
-* [ ] JSON persistence
+* [x] Host information
+* [x] Hostnames
+* [x] MAC addresses
+* [x] Open ports
+* [x] Detected services
+* [x] Scan timestamps
+* [x] JSON persistence
 
 ### Phase 6 — Monitoring
 
