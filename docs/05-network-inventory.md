@@ -143,9 +143,97 @@ Funcionando de punta a punta: IP, MAC, estado de actividad y puertos con sus ser
 
 ---
 
+## Hostname (reverse DNS integrado)
+
+Se integró `reverse_dns()` (ya implementada en Fase 4) dentro de `escanear_host()`. La función devuelve el diccionario completo `{"ip": ..., "dominio": ...}` — hay que extraer específicamente `resultado_dns["dominio"]` para guardar solo el nombre, no el diccionario anidado completo.
+
+## Timestamp
+
+Se usa el módulo `datetime` para marcar el momento de cada escaneo:
+
+```python
+from datetime import datetime
+
+ahora = datetime.now()
+ahora.strftime("%Y-%m-%d %H:%M:%S")  # → "2026-09-15 00:48:35"
+```
+
+`datetime.now()` da un objeto con microsegundos; `.strftime(...)` lo convierte a un string legible con el formato deseado (`%Y` año, `%m` mes, `%d` día, `%H` hora, `%M` minutos, `%S` segundos).
+
+**Decisión de ubicación — timestamp por host**: se calcula al **final** de `escanear_host()` (no al principio), ya que la diferencia entre el momento del ping y el momento en que termina todo el procesamiento del host (puertos, ARP, DNS) es de pocos segundos, irrelevante para el propósito de inventario.
+
+**Decisión de ubicación — timestamp del escaneo completo (nombre de archivo)**: se calcula al **principio** de todo el pipeline (antes de detectar la red), ya que representa "cuándo arrancó esta foto de la red" — el dato más relevante para ordenar y comparar escaneos cronológicamente en Fase 6, a diferencia del timestamp por host.
+
+### Dato observado: la propia MAC no aparece en su tabla ARP
+
+Al escanear la propia IP de la máquina, `"mac"` da `None` — la tabla ARP registra las MACs de *otros* dispositivos con los que hubo comunicación; una máquina no necesita resolverse a sí misma vía ARP, así que no aparece en su propia tabla. Comportamiento esperado, no un bug.
+
+---
+
+## Persistencia: guardado en JSON
+
+### Formato elegido: un archivo por escaneo
+
+Se decidió generar **un archivo nuevo por cada corrida completa** (en vez de sobreescribir un único archivo), pensando en Fase 6: comparar el estado de la red a lo largo del tiempo requiere conservar cada "foto" por separado — un archivo que se sobreescribe perdería todo el histórico.
+
+### Nombre de archivo: timestamp sin caracteres problemáticos
+
+El formato de timestamp usado dentro de cada host (`%Y-%m-%d %H:%M:%S`, con espacio y `:`) no es apto para nombres de archivo — el espacio y los `:` son problemáticos en muchos sistemas de archivos y en la línea de comandos. Se usa un formato distinto, con `-` como único separador:
+
+```python
+str_times_tamp = timestamp.strftime("%Y-%m-%d-%H-%M-%S")
+# → "2026-09-15-01-52-29"
+```
+
+Se descartó `|` como separador entre fecha y hora (alternativa considerada) por ser un carácter con significado especial en la terminal (pipes), que obligaría a escapar el nombre del archivo en cualquier operación de línea de comandos.
+
+### Escribiendo el archivo: `open()` + `json.dump()`
+
+```python
+with open(nombre_archivo, "w") as archivo:
+    json.dump(inventario_completo, archivo, indent=4)
+```
+
+- `open(ruta, "w")`: abre (o crea) un archivo en modo escritura — sobreescribe si ya existe con ese nombre exacto.
+- `json.dump(datos, archivo, indent=4)`: variante de `json.dumps()` que escribe directo a un archivo abierto, en vez de devolver un string.
+- El `with` cierra el archivo automáticamente al terminar, mismo patrón que `ThreadPoolExecutor`.
+
+### Bug: rutas relativas dependen del directorio de trabajo, no de la ubicación del script
+
+Primer intento: `os.makedirs("logs", exist_ok=True)`. Al ejecutar el script con `python /ruta/completa/a/ping.py` desde el directorio home (`~`), la carpeta `logs/` se creó en el **home** (`/home/usuario/logs`), no en la raíz del proyecto.
+
+**Causa**: una ruta relativa como `"logs"` se resuelve en base al **directorio de trabajo actual** de la terminal en el momento de ejecutar — no en base a dónde está guardado el archivo `.py` en el disco. Pasarle la ruta completa del script a `python` no cambia cuál es el directorio de trabajo.
+
+**Solución robusta con `__file__`**: variable especial que Python define automáticamente en cada archivo, con la ruta real de ese archivo en el disco — constante sin importar desde dónde se ejecute el script.
+
+```python
+carpeta_actual = os.path.dirname(__file__)
+# .../NetGuard/docs/experiments
+
+raiz_proyecto = os.path.dirname(os.path.dirname(carpeta_actual))
+# .../NetGuard  (sube 2 niveles: experiments → docs → NetGuard)
+
+carpeta_logs = os.path.join(raiz_proyecto, "logs")
+```
+
+`os.path.dirname(ruta)` quita el último componente de una ruta (archivo o carpeta) y devuelve el padre — aplicado 3 veces en total (una para pasar de `__file__` a `carpeta_actual`, dos más para subir de `experiments` a `docs` y de `docs` a la raíz). `os.path.join(...)` une componentes de ruta de forma segura, sin concatenar strings a mano con `+` (evita errores de barras `/` mal puestas o duplicadas).
+
+### Bloque final del pipeline
+
+```python
+os.makedirs(carpeta_logs, exist_ok=True)
+nombre_archivo = os.path.join(carpeta_logs, "inventario_" + str_times_tamp + ".json")
+
+with open(nombre_archivo, "w") as archivo:
+    json.dump(inventario_completo, archivo, indent=4)
+```
+
+### Resultado final
+
+Ejecución completa contra la red doméstica (`192.168.1.0/24`, 6 hosts activos): genera `logs/inventario_2026-09-15-01-52-29.json` con el inventario completo (IP, MAC, hostname, puertos, servicios, timestamp por host), en la raíz del proyecto, sin importar desde dónde se ejecute el script.
+
+---
+
 ## Dudas / pendientes
 
-- **Pendiente**: agregar hostname al resultado, usando `reverse_dns()` (ya implementada en Fase 4) — falta integrarla a `escanear_host()`.
-- **Pendiente**: agregar timestamp a cada resultado, marcando el momento del escaneo.
-- **Pendiente**: implementar el guardado de resultados en archivos JSON (persistencia real entre ejecuciones) — el objetivo central de esta fase, todavía no resuelto.
-- **Pendiente**: decidir la estructura del archivo JSON de inventario (¿un archivo por escaneo con timestamp en el nombre? ¿un único archivo que se actualiza? ¿histórico acumulativo?) — a definir antes de implementar el guardado.
+- **Pendiente**: evaluar si guardar el archivo con nombre timestamped como único mecanismo de histórico es suficiente, o si más adelante conviene una estructura más consultable (ej. un índice, o nombrar por rango de red además de fecha).
