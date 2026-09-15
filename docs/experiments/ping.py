@@ -4,8 +4,15 @@ import re
 import ipaddress
 import time
 import socket
+import os
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
+from datetime import datetime
+
+
+
+timestamp = datetime.now()
+str_times_tamp = timestamp.strftime("%Y-%m-%d-%H-%M-%S")
 
 
 def obtener_interfaces():
@@ -128,7 +135,7 @@ def escanear_host(ip, tabla_arp, puertos=None):
     resultado_ping = hacer_ping(ip)
 
     if resultado_ping["activo"] == False:
-        return {"ip": ip,"mac": None, "activo": False, "puertos": []}
+        return {"ip": ip,"mac": None,"hostname" : None, "activo": False, "puertos": [], "timestamp": None}
 
     puertos_distintos = partial(escanear_puerto, ip, timeout=1)
 
@@ -136,8 +143,12 @@ def escanear_host(ip, tabla_arp, puertos=None):
         resultados_puertos = list(pool.map(puertos_distintos, puertos))
 
     mac = buscar_mac(ip, tabla_arp)
+    resultado_dns = reverse_dns(ip)
 
-    return {"ip": ip,"mac": mac, "activo": True, "puertos": resultados_puertos}
+    timestamp = datetime.now()
+    str_times_tamp = timestamp.strftime("%Y-%m-%d %H:%M:%S")
+
+    return {"ip": ip,"mac": mac,"hostname": resultado_dns["dominio"], "activo": True, "puertos": resultados_puertos, "timestamp": str_times_tamp}
 
 
 def obtener_tabla_arp():
@@ -195,12 +206,29 @@ with ThreadPoolExecutor(max_workers=60) as pool:
     resultados = list(pool.map(timeout_ping, lista_ip))
 fin = time.time()
 
+print(f"Tardó {fin - inicio:.2f} segundos en el ping")
+
 tabla_arp = obtener_tabla_arp()
+
+inventario_completo=[]
 
 for activos in resultados:
     if activos["activo"] == True:
-        print(json.dumps(escanear_host(activos["ip"], tabla_arp), indent=4))
+        inventario_completo.append(escanear_host(activos["ip"], tabla_arp))
 
+
+carpeta_actual = os.path.dirname(__file__)
+raiz_proyecto = os.path.dirname(os.path.dirname(carpeta_actual))
+carpeta_logs = os.path.join(raiz_proyecto, "logs")
+os.makedirs(carpeta_logs, exist_ok=True)
+nombre_archivo = os.path.join(carpeta_logs, "inventario_" + str_times_tamp + ".json") 
+
+print("A punto de guardar el archivo...")
+with open(nombre_archivo, "w") as archivo:
+    json.dump(inventario_completo, archivo, indent=4)
+    print("Archivo guardado con éxito")
+
+"""
 print(f"Tardó {fin - inicio:.2f} segundos")
 # Caso 1: sin especificar tipo, debería usar "A" por defecto (mismo comportamiento de siempre)
 print(consultar_dns("google.com"))
@@ -221,3 +249,4 @@ print(reverse_dns("8.8.8.8"))          # debería darte "dns.google."
 print(reverse_dns("192.168.1.1"))      # tu router de casa — probablemente no tenga PTR configurado, buen caso para probar el None
 
 print(obtener_tabla_arp())
+"""
