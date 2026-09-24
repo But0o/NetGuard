@@ -166,5 +166,91 @@ Confirmado: la comparación detecta correctamente un cambio de estado cuando exi
 
 - **Pendiente**: agregar latencia y packet loss al inventario guardado — actualmente `escanear_host()` no persiste esos datos de `hacer_ping()`, solo el estado `activo`. Necesario antes de poder comparar esas métricas en el tiempo. Evaluado y decidido posponer: no es prioritario, ya que no aporta aprendizaje nuevo, solo evita descartar un dato ya calculado.
 - **Pendiente**: comparación por MAC en vez de por IP, para detectar el caso de un mismo dispositivo con IP reasignada por DHCP (la IP cambia, pero el dispositivo físico es el mismo).
-- **Pendiente**: automatizar la generación de escaneos repetidos a intervalos (cron, loop con sleep, o scheduler) — una vez que la comparación esté más completa.
-- **Pendiente**: revisar el warning `SyntaxWarning: "\d" is an invalid escape sequence` — sigue apareciendo, indica que hay un patrón regex sin el prefijo `r` (raw string) en algún lugar del archivo (línea 50 según el traceback).
+---
+
+## Automatización: escaneos repetidos con systemd timers
+
+### Por qué systemd timers en vez de cron
+
+`cron` no estaba instalado en el sistema (CachyOS/Arch no lo incluye por defecto). En vez de instalarlo, se optó por **systemd timers**, el mecanismo nativo de programación de tareas en distribuciones basadas en systemd — más alineado con el objetivo de aprender Linux en profundidad.
+
+### Dos archivos, separación de responsabilidades
+
+A diferencia de `cron` (una sola línea con horario + comando), systemd timers usa dos archivos con roles distintos, en `~/.config/systemd/user/`:
+
+- **`.service`**: define **qué** ejecutar.
+- **`.timer`**: define **cuándo** ejecutarlo.
+
+Ambos archivos comparten el mismo nombre base (solo cambia la extensión) — systemd los asocia automáticamente por convención de nombre.
+
+### `netguard-scan.service`
+
+```ini
+[Unit]
+Description=Escaneo de red NetGuard
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /home/b0o/Proyectos/NetGuard/scripts/run_scan.py
+```
+
+`Type=oneshot` indica que la tarea se ejecuta una vez y termina (no queda corriendo indefinidamente) — coincide con cómo funciona `run_scan.py`. Se usan **rutas absolutas completas** tanto para el ejecutable de Python (`which python3`) como para el script — necesario porque systemd no carga la configuración de shell del usuario (no sabe "desde dónde" se ejecutaría normalmente un comando en una terminal interactiva).
+
+### `netguard-scan.timer`
+
+```ini
+[Unit]
+Description=Timer para escaneo de red NetGuard cada 20 minutos
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=20min
+
+[Install]
+WantedBy=timers.target
+```
+
+- `OnBootSec=1min`: la primera ejecución ocurre 1 minuto después de activar el timer (evita ejecutar en el instante exacto de activación).
+- `OnUnitActiveSec=20min`: repite cada 20 minutos después de la ejecución anterior — equivalente a `*/20 * * * *` en sintaxis cron.
+- `WantedBy=timers.target`: necesario para que el timer se integre correctamente al arranque normal de timers del usuario.
+
+### Activación
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable netguard-scan.timer
+systemctl --user start netguard-scan.timer
+```
+
+`daemon-reload` hace que systemd relea la configuración; `enable` hace que el timer persista entre sesiones; `start` lo activa inmediatamente.
+
+### Verificación
+
+```bash
+systemctl --user status netguard-scan.timer
+systemctl --user list-timers
+```
+
+El campo `Trigger`/`NEXT` mostró inicialmente `n/a` — se resolvió solo, tras unos segundos, una vez que systemd terminó de calcular la próxima ejecución (no era un error de configuración, solo timing de la consulta).
+
+Confirmado funcionando: próxima ejecución calculada correctamente a los 20 minutos de la activación.
+
+### Para revisar ejecuciones pasadas
+
+```bash
+journalctl --user -u netguard-scan.service
+```
+
+Muestra la salida (print()) de cada ejecución del servicio — útil para diagnosticar fallos silenciosos sin tener que esperar y mirar manualmente.
+
+### Introducción a vim
+
+Primer uso de vim para crear los archivos de configuración. Conceptos mínimos:
+
+- Modo normal (por defecto al abrir): las teclas son comandos, no escriben texto.
+- `i`: entra a modo inserción, para escribir texto normalmente.
+- `Esc`: vuelve a modo normal.
+- `:wq` (en modo normal): guarda y sale.
+- `:q!` (en modo normal): sale sin guardar, descartando cambios.
+
+- **Resuelto**: el warning `SyntaxWarning: "\d" is an invalid escape sequence` no era un bug en el código en sí — el bloque completo de funciones (`hacer_ping`, `consultar_dns`, etc.) estaba deliberadamente comentado con triple comilla (`"""..."""`) para poder trabajar solo en la lógica de comparación de inventarios sin correr el escaneo completo cada vez. Dentro de un string de triple comilla sin prefijo `r`, el `r` de un raw string interno (como `r"ttl=(\d+)"`) no tiene efecto real — Python igual analiza el contenido como texto y advierte sobre la secuencia de escape. El código nunca se ejecutaba (estaba efectivamente desactivado), así que el warning era inofensivo. Se resolvió cambiando a comentarios línea por línea con `#`, que Python ignora por completo sin ningún análisis de sintaxis interno.
