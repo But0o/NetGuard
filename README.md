@@ -137,8 +137,8 @@ This project is being used to develop practical knowledge of:
 * [ ] Availability monitoring
 * [ ] Latency history
 * [ ] Packet loss history
-* [ ] Event logging
-* [ ] Historical data
+* [x] Event logging
+* [x] Historical data
 
 ### Phase 7 — Network Security
 
