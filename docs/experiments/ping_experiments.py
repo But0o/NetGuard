@@ -10,7 +10,7 @@ from functools import partial
 from datetime import datetime
 
 
-
+"""
 timestamp = datetime.now()
 str_times_tamp = timestamp.strftime("%Y-%m-%d-%H-%M-%S")
 
@@ -227,7 +227,7 @@ print("A punto de guardar el archivo...")
 with open(nombre_archivo, "w") as archivo:
     json.dump(inventario_completo, archivo, indent=4)
     print("Archivo guardado con éxito")
-
+"""
 """
 print(f"Tardó {fin - inicio:.2f} segundos")
 # Caso 1: sin especificar tipo, debería usar "A" por defecto (mismo comportamiento de siempre)
@@ -250,3 +250,69 @@ print(reverse_dns("192.168.1.1"))      # tu router de casa — probablemente no 
 
 print(obtener_tabla_arp())
 """
+
+
+
+def leer_inventario(ruta):
+
+    with open(ruta, "r") as archivo:
+        datos = json.load(archivo)
+
+    return datos
+
+inventario_viejo = leer_inventario("logs/inventario_2026-09-15-01-52-29.json")
+inventario_nuevo = leer_inventario("logs/inventario_2026-09-15-02-07-28.json")
+
+
+ips_viejas = set([dato["ip"] for dato in inventario_viejo])
+ips_nuevas = set([dato["ip"] for dato in inventario_nuevo])
+
+ip_referencia_vieja = next(iter(ips_viejas))
+octetos_viejo = ip_referencia_vieja.split(".")[:3]
+
+ip_referencia_nueva = next(iter(ips_nuevas))
+octetos_nuevo = ip_referencia_nueva.split(".")[:3]
+
+nuevos = ips_nuevas - ips_viejas
+desaparecidas = ips_viejas - ips_nuevas
+
+
+if octetos_viejo == octetos_nuevo:
+    print("Esta es la comparacion de la red")
+    print(nuevos)
+    print(desaparecidas)
+else:
+    print("Se reviso la red y los logs que desea comparar son en redes distintas")
+
+
+def buscar_host(ip, inventario):
+    host_encontrado = None
+
+    for encontrado in inventario:
+        if encontrado["ip"] == ip:
+            host_encontrado = encontrado
+
+    return host_encontrado
+
+
+def buscar_puerto(numero_puerto, lista_puerto):
+    puerto_encontrado = None
+
+    for encontrado in lista_puerto:
+        if encontrado["puerto"] == numero_puerto:
+            puerto_encontrado = encontrado
+
+    return puerto_encontrado
+
+
+ips_comunes = ips_nuevas & ips_viejas
+
+for ip in ips_comunes:
+    host_viejo = buscar_host(ip, inventario_viejo)
+    host_nuevo = buscar_host(ip, inventario_nuevo)
+
+    for puerto_viejo in host_viejo["puertos"]:
+        puerto_nuevo = buscar_puerto(puerto_viejo["puerto"], host_nuevo["puertos"])
+
+        if puerto_viejo["estado"] != puerto_nuevo["estado"]:
+            print(f"Puerto {puerto_nuevo['puerto']} de {ip} cambió de {puerto_viejo['estado']} a {puerto_nuevo['estado']}")
