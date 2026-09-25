@@ -260,8 +260,63 @@ def leer_inventario(ruta):
 
     return datos
 
+def buscar_host(ip, inventario):
+    host_encontrado = None
+
+    for encontrado in inventario:
+        if encontrado["ip"] == ip:
+            host_encontrado = encontrado
+
+    return host_encontrado
+
+
+def buscar_puerto(numero_puerto, lista_puerto):
+    puerto_encontrado = None
+
+    for encontrado in lista_puerto:
+        if encontrado["puerto"] == numero_puerto:
+            puerto_encontrado = encontrado
+
+    return puerto_encontrado
+
 inventario_viejo = leer_inventario("logs/inventario_2026-09-15-01-52-29.json")
 inventario_nuevo = leer_inventario("logs/inventario_2026-09-15-02-07-28.json")
+
+
+ip_buscar = "192.168.0.1"
+
+archivos = os.listdir("logs")
+
+rutas_completas = []
+
+for nombre_archivo in archivos:
+    rutas_completas.append(os.path.join("logs", nombre_archivo))
+
+inventario = []
+
+for archivo in rutas_completas:
+    inventario.append(leer_inventario(archivo))
+
+veces_activo = 0
+sumar_tiempo_ms = 0
+sumar_perdida = 0
+
+for escaneo in inventario:
+    resultado_busqueda = buscar_host(ip_buscar,escaneo)
+    if resultado_busqueda is not None and resultado_busqueda["activo"] == True:
+        veces_activo += 1
+        sumar_tiempo_ms += resultado_busqueda.get("tiempo_ms", 0)
+        sumar_perdida += resultado_busqueda.get("perdida", 0)
+
+porcentaje_uptime = (veces_activo / len(inventario)) * 100
+promedio_tiempo_ms = sumar_tiempo_ms / veces_activo
+promedio_perdida = sumar_perdida / veces_activo
+
+
+print(porcentaje_uptime)
+print(promedio_tiempo_ms)
+print(promedio_perdida)
+
 
 
 ips_viejas = set([dato["ip"] for dato in inventario_viejo])
@@ -283,27 +338,6 @@ if octetos_viejo == octetos_nuevo:
     print(desaparecidas)
 else:
     print("Se reviso la red y los logs que desea comparar son en redes distintas")
-
-
-def buscar_host(ip, inventario):
-    host_encontrado = None
-
-    for encontrado in inventario:
-        if encontrado["ip"] == ip:
-            host_encontrado = encontrado
-
-    return host_encontrado
-
-
-def buscar_puerto(numero_puerto, lista_puerto):
-    puerto_encontrado = None
-
-    for encontrado in lista_puerto:
-        if encontrado["puerto"] == numero_puerto:
-            puerto_encontrado = encontrado
-
-    return puerto_encontrado
-
 
 ips_comunes = ips_nuevas & ips_viejas
 
