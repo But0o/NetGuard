@@ -164,8 +164,148 @@ Confirmado: la comparación detecta correctamente un cambio de estado cuando exi
 
 ## Dudas / pendientes
 
-- **Pendiente**: agregar latencia y packet loss al inventario guardado — actualmente `escanear_host()` no persiste esos datos de `hacer_ping()`, solo el estado `activo`. Necesario antes de poder comparar esas métricas en el tiempo. Evaluado y decidido posponer: no es prioritario, ya que no aporta aprendizaje nuevo, solo evita descartar un dato ya calculado.
-- **Pendiente**: comparación por MAC en vez de por IP, para detectar el caso de un mismo dispositivo con IP reasignada por DHCP (la IP cambia, pero el dispositivo físico es el mismo).
+---
+
+## Latencia y packet loss en el inventario
+
+Se agregaron los campos `tiempo_ms` y `perdida` al resultado de `escanear_host()`, extrayéndolos de `resultado_ping` (ya calculados por `hacer_ping()` desde Fase 2, pero descartados hasta ahora al construir el inventario). Ambas ramas del return (`activo: True` / `False`) incluyen las mismas claves, manteniendo la consistencia ya aplicada al resto de los campos.
+
+```python
+return {
+    "ip": ip,
+    "mac": mac,
+    "hostname": resultado_dns["dominio"],
+    "activo": True,
+    "puertos": resultados_puertos,
+    "timestamp": str_timestamp,
+    "tiempo_ms": resultado_ping["tiempo_ms"],
+    "perdida": resultado_ping["perdida"],
+}
+```
+
+Con esto, el inventario ya tiene la base de datos necesaria para poder construir historial de latencia y packet loss (comparando estos valores entre varios escaneos), pendiente de implementar.
+
+## Alias de shell para ejecutar el escaneo
+
+Se creó un alias permanente en fish para simplificar la ejecución manual del pipeline mientras no existe una interfaz:
+
+```fish
+alias netguard-scan="python3 /home/b0o/Proyectos/NetGuard/scripts/run_scan.py"
+funcsave netguard-scan
+```
+
+`funcsave` guarda el alias en la configuración de fish (`~/.config/fish/config.fish`) de forma permanente, disponible en cualquier terminal nueva, sin necesidad de editar el archivo manualmente.
+
+---
+
+## Availability monitoring (uptime)
+
+### El problema
+
+A diferencia de comparar 2 escaneos, uptime requiere analizar una **serie completa** de escaneos históricos y calcular, para un host puntual, qué porcentaje de esos escaneos lo encontraron activo.
+
+### Listando todos los archivos de logs/: `os.listdir()`
+
+```python
+archivos = os.listdir("logs")
+
+rutas_completas = []
+for nombre_archivo in archivos:
+    rutas_completas.append(os.path.join("logs/", nombre_archivo))
+```
+
+`os.listdir(carpeta)` devuelve una lista de nombres (strings) de todo lo que hay en esa carpeta — no rutas completas, hay que combinarlas con `os.path.join()`.
+
+### Leyendo todos los inventarios
+
+```python
+inventario = []
+for archivo in rutas_completas:
+    inventario.append(leer_inventario(archivo))
+```
+
+`inventario` queda como una lista de listas: cada elemento es el contenido completo de un archivo de escaneo (una lista de hosts).
+
+### Calculando el porcentaje de disponibilidad
+
+```python
+veces_activo = 0
+
+for escaneo in inventario:
+    resultado_busqueda = buscar_host(ip_buscar, escaneo)
+    if resultado_busqueda is not None and resultado_busqueda["activo"] == True:
+        veces_activo += 1
+
+porcentaje_uptime = (veces_activo / len(inventario)) * 100
+```
+
+`buscar_host()` (Fase 6, comparación de puertos) devuelve `None` si la IP no aparece en ese escaneo — condición combinada con `and` (evaluación de cortocircuito: si `resultado_busqueda is not None` es `False`, Python no llega a evaluar `resultado_busqueda["activo"]`, evitando el error de acceder a una clave de `None`).
+
+### Bug de interpretación: uptime mezclando redes distintas
+
+Primera prueba, con una IP de la red doméstica (`192.168.1.1`): **18.18%** — resultado sorprendentemente bajo.
+
+**Causa**: el timer de systemd estuvo corriendo escaneos mientras se cambiaba de red (casa → facultad → otra red con `192.168.0.x`) — la mayoría de los archivos de `logs/` correspondían a redes donde esa IP ni siquiera existía. El cálculo no distingue "host no respondió" de "host no pertenece a esta red" — trata ambos casos igual (cuenta como no activo).
+
+Segunda prueba, con la IP más frecuente en los logs (`192.168.0.1`): **63.6%** — resultado mucho más consistente con la realidad.
+
+**Limitación conocida, pendiente de resolver**: el uptime debería calcularse solo dentro de escaneos de la misma red (mismo criterio de validación ya usado para nuevos/desaparecidos y comparación de puertos), filtrando antes de contar, en vez de mezclar redes distintas en el mismo cálculo.
+
+---
+
+## Latency history y Packet loss history
+
+Mismo patrón que uptime, en el mismo loop (una sola pasada calcula las 3 métricas):
+
+```python
+veces_activo = 0
+sumar_tiempo_ms = 0
+sumar_perdida = 0
+
+for escaneo in inventario:
+    resultado_busqueda = buscar_host(ip_buscar, escaneo)
+    if resultado_busqueda is not None and resultado_busqueda["activo"] == True:
+        veces_activo += 1
+        sumar_tiempo_ms += resultado_busqueda.get("tiempo_ms", 0)
+        sumar_perdida += resultado_busqueda.get("perdida", 0)
+
+porcentaje_uptime = (veces_activo / len(inventario)) * 100
+promedio_tiempo_ms = sumar_tiempo_ms / veces_activo
+promedio_perdida = sumar_perdida / veces_activo
+```
+
+### Bug: `KeyError` con registros históricos anteriores al cambio
+
+Al sumar `resultado_busqueda["tiempo_ms"]` con acceso directo, se obtuvo `KeyError: 'tiempo_ms'`. Causa: los archivos de `logs/` generados **antes** de agregar esos campos a `escanear_host()` (incluyendo los que generó el timer de systemd corriendo automáticamente durante la noche) no tienen esas claves — fueron guardados con una versión anterior de la función.
+
+**Solución**: `resultado_busqueda.get("tiempo_ms", 0)` / `resultado_busqueda.get("perdida", 0)` en vez de acceso directo — mismo patrón usado repetidas veces en el proyecto (`servicios.get(...)`, `arp.get("lladdr", None)`) para tolerar datos con forma inconsistente entre versiones.
+
+**Por qué `0` y no `None` como default**: el valor se usa en una suma acumulativa (`sumar_tiempo_ms += ...`); sumar `None` a un número genera `TypeError`. `0` es el único valor que no altera el resultado de una suma ("no aporta nada").
+
+**Limitación conocida de esta aproximación**: un registro histórico sin el campo cuenta como si hubiera aportado `0` a la suma, aunque en realidad su valor real es simplemente desconocido (no fue medido en ese momento) — distinto de haber medido genuinamente `0` de latencia o pérdida. El promedio final queda levemente distorsionado hacia abajo cuando hay registros viejos mezclados con nuevos. Aceptable como aproximación inicial, documentado para revisar si se vuelve significativo con más historial.
+
+### Prueba real
+
+Con `192.168.0.1` (la IP más frecuente en el histórico de `logs/`):
+
+```
+Uptime: 66.67%
+Latencia promedio: 2.61 ms
+Packet loss promedio: 0.0%
+```
+
+---
+
+## Fase 6 — Estado final
+
+- [x] Historical data
+- [x] Event logging
+- [x] Availability monitoring
+- [x] Latency history
+- [x] Packet loss history
+
+Fase 6 completa.
+
 ---
 
 ## Automatización: escaneos repetidos con systemd timers
