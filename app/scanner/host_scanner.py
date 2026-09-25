@@ -22,7 +22,16 @@ def escanear_host(ip, tabla_arp, puertos=None):
     resultado_ping = hacer_ping(ip)
 
     if resultado_ping["activo"] == False:
-        return {"ip": ip, "mac": None, "hostname": None, "activo": False, "puertos": [], "timestamp": None}
+        return {
+            "ip": ip,
+            "mac": None,
+            "hostname": None,
+            "activo": False,
+            "puertos": [],
+            "timestamp": None,
+            "tiempo_ms" : None,
+            "perdida": None
+        }
 
     puertos_distintos = partial(escanear_puerto, ip, timeout=1)
 
@@ -41,5 +50,7 @@ def escanear_host(ip, tabla_arp, puertos=None):
         "hostname": resultado_dns["dominio"],
         "activo": True,
         "puertos": resultados_puertos,
-        "timestamp": str_timestamp
+        "timestamp": str_timestamp,
+        "tiempo_ms": resultado_ping["tiempo_ms"],
+        "perdida": resultado_ping["perdida"],
     }
