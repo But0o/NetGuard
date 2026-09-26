@@ -10,7 +10,11 @@ from app.scanner.port_scanner import escanear_puerto
 PUERTOS_COMUNES = [80, 443, 22, 21, 23]
 
 
-def escanear_host(ip, tabla_arp, puertos=None):
+def generar_rango_puertos(inicio, fin):
+    return list(range(inicio, fin + 1))
+
+
+def escanear_host(ip, tabla_arp, puertos=None, max_workers=5):
     """Escaneo completo de un host: ping, puertos comunes (concurrente),
     MAC (via tabla ARP ya obtenida) y hostname (reverse DNS).
 
@@ -35,7 +39,7 @@ def escanear_host(ip, tabla_arp, puertos=None):
 
     puertos_distintos = partial(escanear_puerto, ip, timeout=1)
 
-    with ThreadPoolExecutor(max_workers=5) as pool:
+    with ThreadPoolExecutor(max_workers = max_workers) as pool:
         resultados_puertos = list(pool.map(puertos_distintos, puertos))
 
     mac = buscar_mac(ip, tabla_arp)
