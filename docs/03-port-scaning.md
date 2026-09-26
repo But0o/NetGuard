@@ -323,16 +323,6 @@ Probado con éxito, incluyendo el caso de un puerto fuera de la tabla (`8080`), 
 
 ---
 
-## Fase 3 — Estado final
-
-- [x] TCP socket scanning
-- [x] Connection timeout
-- [x] Concurrent scanning
-- [x] Basic service detection
-- [ ] Configurable port ranges (parcial — acepta lista custom de puertos, no rango numérico tipo 1-1000)
-
----
-
 ## Dudas / pendientes
 
 - **Pendiente**: investigar si el código `11` depende del tipo/sistema operativo del dispositivo en vez del puerto consultado — hipótesis revisada, sin confirmar.
