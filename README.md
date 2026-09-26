@@ -134,9 +134,9 @@ This project is being used to develop practical knowledge of:
 
 ### Phase 6 — Monitoring
 
-* [ ] Availability monitoring
-* [ ] Latency history
-* [ ] Packet loss history
+* [x] Availability monitoring
+* [x] Latency history
+* [x] Packet loss history
 * [x] Event logging
 * [x] Historical data
 
