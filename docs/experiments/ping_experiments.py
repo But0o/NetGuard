@@ -341,6 +341,8 @@ else:
 
 ips_comunes = ips_nuevas & ips_viejas
 
+puertos_sensibles = {21, 23}
+
 for ip in ips_comunes:
     host_viejo = buscar_host(ip, inventario_viejo)
     host_nuevo = buscar_host(ip, inventario_nuevo)
@@ -348,5 +350,8 @@ for ip in ips_comunes:
     for puerto_viejo in host_viejo["puertos"]:
         puerto_nuevo = buscar_puerto(puerto_viejo["puerto"], host_nuevo["puertos"])
 
-        if puerto_viejo["estado"] != puerto_nuevo["estado"]:
-            print(f"Puerto {puerto_nuevo['puerto']} de {ip} cambió de {puerto_viejo['estado']} a {puerto_nuevo['estado']}")
+        if puerto_viejo['estado'] == "Cerrado" and puerto_nuevo['estado'] == "Abierto":
+            if puerto_nuevo['puerto'] in puertos_sensibles:
+                print(f"🔴 ALERTA CRÍTICA: puerto sensible {puerto_nuevo['puerto']} se abrió en {ip}")
+            else:
+                print(f"🟡 Alerta: puerto {puerto_nuevo['puerto']} se abrió en {ip}")
