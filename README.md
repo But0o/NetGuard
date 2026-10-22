@@ -8,6 +8,12 @@ The main goal of this project is to progressively explore **computer networking,
 
 Rather than building the entire application at once, NetGuard is being developed incrementally, with each stage introducing new networking concepts, protocols, tools and software engineering practices.
 
+<p align="center">
+  <img src="docs/img/dashboard-concept.png" alt="Concept of the NetGuard dashboard: hosts online, latency chart, discovered hosts and security events" width="100%">
+  <br>
+  <sub><i>Concept of the planned monitoring dashboard. It is not implemented yet; the data shown is illustrative.</i></sub>
+</p>
+
 ---
 
 ## Project Goals
